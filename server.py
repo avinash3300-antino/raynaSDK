@@ -902,7 +902,7 @@ app.routes.extend(
     [
         Route("/health", health_check),
         Route("/info", server_info),
-        Route("/.well-known/openai-apps-verification", openai_verification),
+        Route("/.well-known/openai-apps-challenge", openai_verification),
     ]
 )
 

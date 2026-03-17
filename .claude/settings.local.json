@@ -5,7 +5,9 @@
       "Bash(tasklist //FI \"PID eq 3584\")",
       "Bash(tasklist)",
       "Bash(taskkill //PID 3584 //F)",
-      "Bash(npm run build)"
+      "Bash(npm run build)",
+      "Bash(python -c \":*)",
+      "Bash(python -c \"import server; print\\(''OK''\\)\")"
     ]
   }
 }
