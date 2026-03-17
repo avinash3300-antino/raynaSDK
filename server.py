@@ -168,16 +168,64 @@ TOOL_SCHEMAS: Dict[str, dict] = {
 }
 
 TOOL_DESCRIPTIONS: Dict[str, str] = {
-    "show-tours": "Search and display tour cards. Filter by city, category, or price. Shows tours in a visual card grid.",
-    "show-tour-detail": "Show detailed information about a specific tour including description, highlights, pricing, and booking link.",
-    "compare-tours": "Compare 2-4 tours side by side with a detailed comparison table highlighting the better values.",
-    "show-holiday-packages": "Show holiday packages available in a specific city.",
-    "get-visa-info": "Get visa requirements and information for a specific country.",
+    "show-tours": (
+        "Search and display tours and activities as visual cards. "
+        "Filter by city (e.g. Dubai, Bangkok, Bali), category (e.g. Desert Safari, Theme Park), "
+        "or price range. Returns a scrollable card grid with images, prices, and booking links."
+    ),
+    "show-tour-detail": (
+        "Show full details for a specific tour including description, highlights, inclusions, "
+        "exclusions, pricing, duration, rating, and a direct booking link."
+    ),
+    "compare-tours": (
+        "Compare 2 to 4 tours side by side in a comparison table. "
+        "Shows price, duration, rating, and highlights for each tour."
+    ),
+    "show-holiday-packages": (
+        "Show holiday and vacation packages for a city, country, or region. "
+        "Supports countries (Thailand, India), states (Kerala, Rajasthan), and cities (Delhi, Bangkok). "
+        "Returns package cards with prices, durations, images, and booking links."
+    ),
+    "get-visa-info": "Get visa requirements, fees, processing time, and documents needed for a specific country.",
     "ask-rayna": (
         "Ask any question about Rayna Tours — destinations, booking policies, "
         "cancellation, what to wear, best time to visit, group discounts, or "
         "get personalized tour recommendations. Uses knowledge base search."
     ),
+}
+
+# Per-tool annotation hints (OpenAI submission requirement)
+TOOL_ANNOTATIONS: Dict[str, dict] = {
+    "show-tours": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,  # calls external Rayna API
+    },
+    "show-tour-detail": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,
+    },
+    "compare-tours": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,
+    },
+    "show-holiday-packages": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,
+    },
+    "get-visa-info": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,
+    },
+    "ask-rayna": {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,  # calls Pinecone + OpenAI
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -211,7 +259,12 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 
 
-def _tool_meta(widget: RaynaWidget) -> Dict[str, Any]:
+def _tool_meta(widget: RaynaWidget, tool_name: str = "") -> Dict[str, Any]:
+    annotations = TOOL_ANNOTATIONS.get(tool_name, {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,
+    })
     return {
         "openai/outputTemplate": widget.template_uri,
         "openai/toolInvocation/invoking": widget.invoking,
@@ -219,11 +272,7 @@ def _tool_meta(widget: RaynaWidget) -> Dict[str, Any]:
         "openai/widgetAccessible": True,
         "openai/resultCanProduceWidget": True,
         "openai/widgetDescription": widget.response_text,
-        "annotations": {
-            "destructiveHint": False,
-            "openWorldHint": False,
-            "readOnlyHint": True,
-        },
+        "annotations": annotations,
     }
 
 
@@ -287,7 +336,7 @@ async def _list_tools() -> List[types.Tool]:
                 title=widget.title,
                 description=TOOL_DESCRIPTIONS.get(widget.identifier, widget.title),
                 inputSchema=TOOL_SCHEMAS[widget.identifier],
-                _meta=_tool_meta(widget),
+                _meta=_tool_meta(widget, widget.identifier),
             )
         )
 
@@ -299,17 +348,18 @@ async def _list_tools() -> List[types.Tool]:
             title="Show Holiday Packages",
             description=TOOL_DESCRIPTIONS["show-holiday-packages"],
             inputSchema=TOOL_SCHEMAS["show-holiday-packages"],
-            _meta=_tool_meta(tour_list_widget),
+            _meta=_tool_meta(tour_list_widget, "show-holiday-packages"),
         )
     )
 
-    # Text-only tools
+    # Text-only tools (with annotations in _meta)
     tool_list.append(
         types.Tool(
             name="get-visa-info",
             title="Get Visa Information",
             description=TOOL_DESCRIPTIONS["get-visa-info"],
             inputSchema=TOOL_SCHEMAS["get-visa-info"],
+            _meta={"annotations": TOOL_ANNOTATIONS["get-visa-info"]},
         )
     )
 
@@ -321,6 +371,7 @@ async def _list_tools() -> List[types.Tool]:
                 title="Ask Rayna",
                 description=TOOL_DESCRIPTIONS["ask-rayna"],
                 inputSchema=TOOL_SCHEMAS["ask-rayna"],
+                _meta={"annotations": TOOL_ANNOTATIONS["ask-rayna"]},
             )
         )
 
@@ -341,7 +392,7 @@ async def _list_resources() -> List[types.Resource]:
                     uri=widget.template_uri,
                     description=_resource_description(widget),
                     mimeType=MIME_TYPE,
-                    _meta=_tool_meta(widget),
+                    _meta=_tool_meta(widget, widget.identifier),
                 )
             )
     return resources
@@ -361,7 +412,7 @@ async def _list_resource_templates() -> List[types.ResourceTemplate]:
                     uriTemplate=widget.template_uri,
                     description=_resource_description(widget),
                     mimeType=MIME_TYPE,
-                    _meta=_tool_meta(widget),
+                    _meta=_tool_meta(widget, widget.identifier),
                 )
             )
     return templates
@@ -378,7 +429,7 @@ async def _handle_read_resource(req: types.ReadResourceRequest) -> types.ServerR
             uri=widget.template_uri,
             mimeType=MIME_TYPE,
             text=widget.html,
-            _meta=_tool_meta(widget),
+            _meta=_tool_meta(widget, widget.identifier),
         )
     ]
     return types.ServerResult(types.ReadResourceResult(contents=contents))
@@ -814,10 +865,16 @@ async def server_info(request):
         {
             "name": "rayna-tours",
             "version": "1.0.0",
+            "description": "Rayna Tours travel assistant — browse tours, holiday packages, compare activities, and get visa info across 50+ destinations.",
+            "author": "Rayna Tours",
+            "homepage": "https://www.raynatours.com",
+            "support": "https://www.raynatours.com/contact-us",
             "pattern": "OpenAI Apps SDK",
+            "protocol": "MCP (Streamable HTTP)",
             "ui": "React",
             "widgets": len(set(w.template_uri for w in widgets)),
             "tools": len(TOOL_SCHEMAS),
+            "rag": HAS_RAG,
         }
     )
 
@@ -834,15 +891,18 @@ app.routes.extend(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import os
     import uvicorn
+
+    port = int(os.getenv("PORT", "8000"))
 
     print("=" * 60)
     print("  Rayna Tours MCP Server with React UI")
     print("=" * 60)
-    print("\n  Endpoints:")
-    print("  - MCP:    http://0.0.0.0:8000/mcp")
-    print("  - Health: http://0.0.0.0:8000/health")
-    print("  - Info:   http://0.0.0.0:8000/info")
+    print(f"\n  Endpoints:")
+    print(f"  - MCP:    http://0.0.0.0:{port}/mcp")
+    print(f"  - Health: http://0.0.0.0:{port}/health")
+    print(f"  - Info:   http://0.0.0.0:{port}/info")
     widget_count = len(set(w.template_uri for w in widgets))
     print(f"\n  UI Widgets: {widget_count}")
     for widget in widgets:
@@ -851,9 +911,9 @@ if __name__ == "__main__":
     print(f"\n  React Bundles: {ui_status}")
     rag_status = "Enabled (Pinecone)" if HAS_RAG else "Disabled (set OPENAI_API_KEY & PINECONE_API_KEY)"
     print(f"  RAG: {rag_status}")
-    print(f"\n  For ChatGPT: http://localhost:8000/mcp")
+    print(f"\n  For ChatGPT: http://localhost:{port}/mcp")
     print("  With ngrok: https://YOUR-URL.ngrok-free.app/mcp")
     print("=" * 60)
     print("\nPress Ctrl+C to stop\n")
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=port)
