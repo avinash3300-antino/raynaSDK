@@ -861,8 +861,18 @@ except Exception:
     pass
 
 # Health and info routes
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
+
+
+OPENAI_VERIFICATION_TOKEN = os.getenv(
+    "OPENAI_VERIFICATION_TOKEN",
+    "ieGBA_N4IZXhzsMO_EQQnRt-iT3Dv_42ouBWcx7aWB4",
+)
+
+
+async def openai_verification(request):
+    return PlainTextResponse(OPENAI_VERIFICATION_TOKEN)
 
 
 async def health_check(request):
@@ -892,6 +902,7 @@ app.routes.extend(
     [
         Route("/health", health_check),
         Route("/info", server_info),
+        Route("/.well-known/openai-apps-verification", openai_verification),
     ]
 )
 
