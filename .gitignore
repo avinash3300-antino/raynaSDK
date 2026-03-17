@@ -2,10 +2,10 @@ __pycache__/
 *.pyc
 .venv/
 node_modules/
-# web/dist/ — kept in repo (production React bundles needed for deployment)
 .env
 *.egg-info/
 dist/
+!web/dist/
 build/
 .uv/
 uv.lock
