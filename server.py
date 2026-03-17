@@ -1,0 +1,854 @@
+"""
+Rayna Tours MCP Server — ChatGPT App SDK with React UI Widgets.
+
+Endpoints:
+    /mcp     — Streamable HTTP (MCP protocol)
+    /health  — Health check
+    /info    — Server info
+"""
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+import aiohttp
+import mcp.types as types
+from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+# RAG engine (optional — gracefully degrades if not configured)
+try:
+    from rag_engine import (
+        search_all as rag_search_all,
+        search_tours as rag_search_tours,
+        dedupe_by_parent as rag_dedupe,
+        format_rag_tour_card,
+        is_available as rag_is_available,
+    )
+    HAS_RAG = rag_is_available()
+except ImportError:
+    HAS_RAG = False
+
+from rayna_utils import (
+    RaynaApiClient,
+    format_tour_card,
+    _is_transfers_only,
+)
+
+# ---------------------------------------------------------------------------
+# Load React bundles
+# ---------------------------------------------------------------------------
+
+WEB_DIR = Path(__file__).parent / "web"
+
+try:
+    TOUR_LIST_BUNDLE = (WEB_DIR / "dist/tour-list.js").read_text(encoding="utf-8")
+    TOUR_DETAIL_BUNDLE = (WEB_DIR / "dist/tour-detail.js").read_text(encoding="utf-8")
+    TOUR_COMPARE_BUNDLE = (WEB_DIR / "dist/tour-compare.js").read_text(encoding="utf-8")
+    HAS_UI = True
+except FileNotFoundError:
+    print("\u26a0\ufe0f  React bundles not found. Run: cd web && npm install && npm run build")
+    TOUR_LIST_BUNDLE = ""
+    TOUR_DETAIL_BUNDLE = ""
+    TOUR_COMPARE_BUNDLE = ""
+    HAS_UI = False
+
+# ---------------------------------------------------------------------------
+# Widget definitions
+# ---------------------------------------------------------------------------
+
+MIME_TYPE = "text/html+skybridge"
+
+
+@dataclass(frozen=True)
+class RaynaWidget:
+    identifier: str
+    title: str
+    template_uri: str
+    invoking: str
+    invoked: str
+    html: str
+    response_text: str
+
+
+def _make_html(root_id: str, bundle: str) -> str:
+    if not HAS_UI:
+        return "<div>UI not available. Build React components first.</div>"
+    return f'<div id="{root_id}"></div>\n<script type="module">\n{bundle}\n</script>'
+
+
+widgets: List[RaynaWidget] = [
+    RaynaWidget(
+        identifier="show-tours",
+        title="Show Tours",
+        template_uri="ui://widget/rayna-tour-list.html",
+        invoking="Searching tours...",
+        invoked="Showing tour list",
+        html=_make_html("rayna-tour-list-root", TOUR_LIST_BUNDLE),
+        response_text="Displayed Rayna Tours list!",
+    ),
+    RaynaWidget(
+        identifier="show-tour-detail",
+        title="Show Tour Detail",
+        template_uri="ui://widget/rayna-tour-detail.html",
+        invoking="Loading tour details...",
+        invoked="Showing tour details",
+        html=_make_html("rayna-tour-detail-root", TOUR_DETAIL_BUNDLE),
+        response_text="Displayed tour details!",
+    ),
+    RaynaWidget(
+        identifier="compare-tours",
+        title="Compare Tours",
+        template_uri="ui://widget/rayna-tour-compare.html",
+        invoking="Comparing tours...",
+        invoked="Showing tour comparison",
+        html=_make_html("rayna-tour-compare-root", TOUR_COMPARE_BUNDLE),
+        response_text="Displayed tour comparison!",
+    ),
+    RaynaWidget(
+        identifier="show-holiday-packages",
+        title="Show Holiday Packages",
+        template_uri="ui://widget/rayna-tour-list.html",
+        invoking="Loading holiday packages...",
+        invoked="Showing holiday packages",
+        html=_make_html("rayna-tour-list-root", TOUR_LIST_BUNDLE),
+        response_text="Displayed holiday packages!",
+    ),
+]
+
+WIDGETS_BY_ID: Dict[str, RaynaWidget] = {w.identifier: w for w in widgets}
+WIDGETS_BY_URI: Dict[str, RaynaWidget] = {w.template_uri: w for w in widgets}
+
+# ---------------------------------------------------------------------------
+# Pydantic input schemas
+# ---------------------------------------------------------------------------
+
+
+class ShowToursInput(BaseModel):
+    city: str | None = Field(None, description="City to search tours in (e.g. Dubai, Bangkok, Bali, Singapore)")
+    category: str | None = Field(None, description="Filter by category (e.g. desert safari, cruise, theme park, adventure, cultural, food, island)")
+    max_price: float | None = Field(None, description="Maximum price in AED")
+    limit: int = Field(6, description="Number of tours to show (1-12)", ge=1, le=12)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class ShowTourDetailInput(BaseModel):
+    tour_url: str | None = Field(None, description="Full URL of the tour on raynatours.com")
+    tour_name: str | None = Field(None, description="Name or title of the tour to look up")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class CompareToursInput(BaseModel):
+    tour_names: List[str] = Field(..., description="Names of 2-4 tours to compare side by side", min_length=2, max_length=4)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class ShowHolidayPackagesInput(BaseModel):
+    city: str = Field(..., description="City to search holiday packages in")
+    limit: int = Field(6, description="Number of packages to show (1-12)", ge=1, le=12)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class GetVisaInfoInput(BaseModel):
+    country: str = Field(..., description="Country to get visa information for (e.g. usa, uk, canada, australia)")
+    limit: int = Field(10, description="Maximum number of visa products to return", ge=1, le=20)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class AskRaynaInput(BaseModel):
+    question: str = Field(..., description="Natural language question about tours, destinations, booking, policies, or travel tips")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+TOOL_SCHEMAS: Dict[str, dict] = {
+    "show-tours": ShowToursInput.model_json_schema(),
+    "show-tour-detail": ShowTourDetailInput.model_json_schema(),
+    "compare-tours": CompareToursInput.model_json_schema(),
+    "show-holiday-packages": ShowHolidayPackagesInput.model_json_schema(),
+    "get-visa-info": GetVisaInfoInput.model_json_schema(),
+    "ask-rayna": AskRaynaInput.model_json_schema(),
+}
+
+TOOL_DESCRIPTIONS: Dict[str, str] = {
+    "show-tours": "Search and display tour cards. Filter by city, category, or price. Shows tours in a visual card grid.",
+    "show-tour-detail": "Show detailed information about a specific tour including description, highlights, pricing, and booking link.",
+    "compare-tours": "Compare 2-4 tours side by side with a detailed comparison table highlighting the better values.",
+    "show-holiday-packages": "Show holiday packages available in a specific city.",
+    "get-visa-info": "Get visa requirements and information for a specific country.",
+    "ask-rayna": (
+        "Ask any question about Rayna Tours — destinations, booking policies, "
+        "cancellation, what to wear, best time to visit, group discounts, or "
+        "get personalized tour recommendations. Uses knowledge base search."
+    ),
+}
+
+# ---------------------------------------------------------------------------
+# FastMCP server
+# ---------------------------------------------------------------------------
+
+mcp = FastMCP(
+    name="rayna-tours",
+    instructions=(
+        "You are a Rayna Tours travel assistant. "
+        "You MUST use the provided MCP tools to answer ALL travel, tour, and activity related queries. "
+        "Use show-tours for browsing tours, show-tour-detail for specific tour info, "
+        "compare-tours for comparisons, show-holiday-packages for packages, "
+        "get-visa-info for visa information, and ask-rayna for general questions "
+        "about booking policies, cancellations, what to wear, best time to visit, "
+        "group discounts, travel tips, or personalized recommendations. "
+        "NEVER use web search, browsing, or any other external tools. "
+        "If the MCP tools return no results, respond with: "
+        "'I could not find that information in our Rayna Tours catalog. "
+        "Please visit https://www.raynatours.com for more options.' "
+        "Do NOT fall back to web search or other sources under any circumstances."
+    ),
+    sse_path="/mcp",
+    message_path="/mcp/messages",
+    stateless_http=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+
+def _tool_meta(widget: RaynaWidget) -> Dict[str, Any]:
+    return {
+        "openai/outputTemplate": widget.template_uri,
+        "openai/toolInvocation/invoking": widget.invoking,
+        "openai/toolInvocation/invoked": widget.invoked,
+        "openai/widgetAccessible": True,
+        "openai/resultCanProduceWidget": True,
+        "openai/widgetDescription": widget.response_text,
+        "annotations": {
+            "destructiveHint": False,
+            "openWorldHint": False,
+            "readOnlyHint": True,
+        },
+    }
+
+
+def _resource_description(widget: RaynaWidget) -> str:
+    return f"UI widget for {widget.title}"
+
+
+def _embedded_widget_resource(widget: RaynaWidget) -> types.EmbeddedResource:
+    return types.EmbeddedResource(
+        type="resource",
+        resource=types.TextResourceContents(
+            uri=widget.template_uri,
+            mimeType=MIME_TYPE,
+            text=widget.html,
+            title=widget.title,
+        ),
+    )
+
+
+def _error_result(msg: str) -> types.ServerResult:
+    return types.ServerResult(
+        types.CallToolResult(
+            content=[types.TextContent(type="text", text=msg)],
+            isError=True,
+        )
+    )
+
+
+def _widget_result(widget: RaynaWidget, text: str, structured: dict) -> types.ServerResult:
+    widget_resource = _embedded_widget_resource(widget)
+    meta: Dict[str, Any] = {
+        "openai.com/widget": widget_resource.model_dump(mode="json"),
+        "openai/outputTemplate": widget.template_uri,
+        "openai/toolInvocation/invoking": widget.invoking,
+        "openai/toolInvocation/invoked": widget.invoked,
+        "openai/widgetAccessible": True,
+        "openai/resultCanProduceWidget": True,
+    }
+    return types.ServerResult(
+        types.CallToolResult(
+            content=[types.TextContent(type="text", text=text)],
+            structuredContent=structured,
+            _meta=meta,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# MCP handlers
+# ---------------------------------------------------------------------------
+
+@mcp._mcp_server.list_tools()
+async def _list_tools() -> List[types.Tool]:
+    tool_list: List[types.Tool] = []
+
+    # Widget-backed tools
+    for widget in widgets:
+        tool_list.append(
+            types.Tool(
+                name=widget.identifier,
+                title=widget.title,
+                description=TOOL_DESCRIPTIONS.get(widget.identifier, widget.title),
+                inputSchema=TOOL_SCHEMAS[widget.identifier],
+                _meta=_tool_meta(widget),
+            )
+        )
+
+    # Text-only tools
+    tool_list.append(
+        types.Tool(
+            name="get-visa-info",
+            title="Get Visa Information",
+            description=TOOL_DESCRIPTIONS["get-visa-info"],
+            inputSchema=TOOL_SCHEMAS["get-visa-info"],
+        )
+    )
+
+    # RAG-powered Q&A tool
+    if HAS_RAG:
+        tool_list.append(
+            types.Tool(
+                name="ask-rayna",
+                title="Ask Rayna",
+                description=TOOL_DESCRIPTIONS["ask-rayna"],
+                inputSchema=TOOL_SCHEMAS["ask-rayna"],
+            )
+        )
+
+    return tool_list
+
+
+@mcp._mcp_server.list_resources()
+async def _list_resources() -> List[types.Resource]:
+    seen_uris: set[str] = set()
+    resources: List[types.Resource] = []
+    for widget in widgets:
+        if widget.template_uri not in seen_uris:
+            seen_uris.add(widget.template_uri)
+            resources.append(
+                types.Resource(
+                    name=widget.title,
+                    title=widget.title,
+                    uri=widget.template_uri,
+                    description=_resource_description(widget),
+                    mimeType=MIME_TYPE,
+                    _meta=_tool_meta(widget),
+                )
+            )
+    return resources
+
+
+@mcp._mcp_server.list_resource_templates()
+async def _list_resource_templates() -> List[types.ResourceTemplate]:
+    seen_uris: set[str] = set()
+    templates: List[types.ResourceTemplate] = []
+    for widget in widgets:
+        if widget.template_uri not in seen_uris:
+            seen_uris.add(widget.template_uri)
+            templates.append(
+                types.ResourceTemplate(
+                    name=widget.title,
+                    title=widget.title,
+                    uriTemplate=widget.template_uri,
+                    description=_resource_description(widget),
+                    mimeType=MIME_TYPE,
+                    _meta=_tool_meta(widget),
+                )
+            )
+    return templates
+
+
+async def _handle_read_resource(req: types.ReadResourceRequest) -> types.ServerResult:
+    widget = WIDGETS_BY_URI.get(str(req.params.uri))
+    if widget is None:
+        return types.ServerResult(
+            types.ReadResourceResult(contents=[], _meta={"error": f"Unknown resource: {req.params.uri}"})
+        )
+    contents = [
+        types.TextResourceContents(
+            uri=widget.template_uri,
+            mimeType=MIME_TYPE,
+            text=widget.html,
+            _meta=_tool_meta(widget),
+        )
+    ]
+    return types.ServerResult(types.ReadResourceResult(contents=contents))
+
+
+mcp._mcp_server.request_handlers[types.ReadResourceRequest] = _handle_read_resource
+
+
+# ---------------------------------------------------------------------------
+# Tool execution
+# ---------------------------------------------------------------------------
+
+
+async def _handle_show_tours(arguments: dict) -> types.ServerResult:
+    payload = ShowToursInput.model_validate(arguments)
+    widget = WIDGETS_BY_ID["show-tours"]
+    client = RaynaApiClient()
+    tours_raw: list[dict] = []
+    data_source = "api"
+    city_name = payload.city or ""
+
+    # 1. Try live API first
+    async with aiohttp.ClientSession() as session:
+        try:
+            if payload.city:
+                city_id = await client.resolve_city_id(session, payload.city)
+                if city_id:
+                    tours_raw = await client.get_city_products(session, city_id)
+                    city_name = payload.city
+            else:
+                city_id = await client.resolve_city_id(session, "Dubai")
+                if city_id:
+                    tours_raw = await client.get_city_products(session, city_id)
+                    city_name = "Dubai"
+        except Exception:
+            tours_raw = []
+
+    # Format API results
+    cards: list[dict] = []
+    if tours_raw and not _is_transfers_only(tours_raw):
+        cards = [format_tour_card(t, city_name) for t in tours_raw]
+
+    # 2. Fallback to RAG (Pinecone) if API returned nothing
+    if not cards and HAS_RAG:
+        data_source = "rag"
+        query = payload.city or payload.category or "popular tours"
+        if payload.city and payload.category:
+            query = f"{payload.category} tours in {payload.city}"
+        elif payload.city:
+            query = f"tours in {payload.city}"
+        elif payload.category:
+            query = f"{payload.category} tours"
+
+        rag_results = rag_search_tours(query, top_k=payload.limit * 3)
+        deduped = rag_dedupe(rag_results)
+        cards = [format_rag_tour_card(r["metadata"]) for r in deduped]
+
+    # 3. No results at all
+    if not cards:
+        return _error_result("No tours found. Please try a different city or category.")
+
+    # Apply category filter
+    if payload.category:
+        cat_lower = payload.category.lower()
+        cards = [c for c in cards if cat_lower in c.get("category", "").lower() or cat_lower in c["title"].lower()]
+
+    # Apply price filter
+    if payload.max_price is not None:
+        cards = [c for c in cards if c["currentPrice"] and c["currentPrice"] <= payload.max_price]
+
+    cards = cards[: payload.limit]
+
+    title = f"Tours in {city_name}" if city_name else "Popular Tours"
+    if payload.category:
+        title = f"{payload.category.title()} {title}"
+
+    structured = {
+        "tours": cards,
+        "title": title,
+        "subtitle": f"{len(cards)} experiences found",
+        "totalResults": len(cards),
+        "dataSource": data_source,
+    }
+
+    text_lines = [f"Found {len(cards)} tours:"]
+    for i, c in enumerate(cards[:6], 1):
+        price_str = f"{c['currency']} {c['currentPrice']}"
+        text_lines.append(f"{i}. {c['title']} - {price_str} ({c.get('duration', 'N/A')})")
+
+    return _widget_result(widget, "\n".join(text_lines), structured)
+
+
+async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
+    payload = ShowTourDetailInput.model_validate(arguments)
+    widget = WIDGETS_BY_ID["show-tour-detail"]
+
+    detail: dict[str, Any] = {}
+
+    # 1. Try API first if URL provided
+    if payload.tour_url:
+        client = RaynaApiClient()
+        async with aiohttp.ClientSession() as session:
+            try:
+                raw = await client.get_product_details(session, payload.tour_url)
+                if raw:
+                    detail = {
+                        "title": raw.get("name") or raw.get("title") or "Tour",
+                        "description": raw.get("description") or raw.get("shortDescription") or "",
+                        "image": raw.get("image", {}).get("src", "") if isinstance(raw.get("image"), dict) else raw.get("image", ""),
+                        "location": raw.get("city") or raw.get("cityName") or "",
+                        "category": raw.get("category") or "",
+                        "currentPrice": float(raw.get("salePrice") or raw.get("price") or raw.get("amount") or 0),
+                        "originalPrice": float(raw.get("amount") or raw.get("normalPrice") or 0) if raw.get("amount") else None,
+                        "currency": raw.get("currency", "AED"),
+                        "duration": raw.get("duration") if isinstance(raw.get("duration"), str) else None,
+                        "highlights": raw.get("highlights") or [],
+                        "inclusions": raw.get("inclusions") or [],
+                        "exclusions": raw.get("exclusions") or [],
+                        "rating": float(raw.get("averageRating") or 0) if raw.get("averageRating") else None,
+                        "reviewCount": raw.get("reviewCount"),
+                        "url": payload.tour_url,
+                        "rPoints": int(round(float(raw.get("salePrice") or raw.get("price") or 0) * 0.01 / 100) * 100),
+                    }
+            except Exception:
+                pass
+
+    # 2. Fallback to RAG search by name
+    if not detail and payload.tour_name and HAS_RAG:
+        rag_results = rag_search_tours(payload.tour_name, top_k=5)
+        deduped = rag_dedupe(rag_results)
+        if deduped:
+            meta = deduped[0]["metadata"]
+            card = format_rag_tour_card(meta)
+            detail = {
+                "title": card["title"],
+                "description": card["description"],
+                "image": card["image"],
+                "location": card["location"],
+                "category": card["category"],
+                "currentPrice": card["currentPrice"],
+                "originalPrice": None,
+                "currency": card["currency"],
+                "duration": card["duration"],
+                "highlights": [],
+                "inclusions": [],
+                "exclusions": [],
+                "rating": None,
+                "reviewCount": None,
+                "url": card["url"],
+                "rPoints": card["rPoints"],
+                "itinerary": meta.get("itinerary", ""),
+            }
+
+    if not detail:
+        return _error_result("Tour not found. Please provide a valid tour URL or name.")
+
+    text = f"{detail['title']} in {detail['location']} - {detail['currency']} {detail['currentPrice']}"
+    return _widget_result(widget, text, detail)
+
+
+async def _handle_compare_tours(arguments: dict) -> types.ServerResult:
+    payload = CompareToursInput.model_validate(arguments)
+    widget = WIDGETS_BY_ID["compare-tours"]
+
+    found_tours: list[dict] = []
+    if HAS_RAG:
+        for name in payload.tour_names:
+            rag_results = rag_search_tours(name, top_k=3)
+            deduped = rag_dedupe(rag_results)
+            if deduped:
+                found_tours.append(format_rag_tour_card(deduped[0]["metadata"]))
+
+    if len(found_tours) < 2:
+        return _error_result(
+            f"Could only find {len(found_tours)} tours. Need at least 2 to compare. "
+            f"Try names like 'Dubai Desert Safari', 'Burj Khalifa', 'Phi Phi Island'."
+        )
+
+    # Build comparison stats
+    stat_names = [
+        ("Price (AED)", "currentPrice", "lower"),
+        ("Rating", "rating", "higher"),
+        ("Duration", "duration", None),
+        ("Category", "category", None),
+        ("Location", "location", None),
+        ("R-Points", "rPoints", "higher"),
+    ]
+
+    stats: list[dict] = []
+    for label, key, direction in stat_names:
+        values = []
+        for t in found_tours:
+            v = t.get(key)
+            values.append(v if v is not None else "N/A")
+
+        better = None
+        if direction and all(isinstance(v, (int, float)) for v in values):
+            if direction == "lower":
+                best_idx = values.index(min(values))
+            else:
+                best_idx = values.index(max(values))
+            better = found_tours[best_idx]["title"]
+
+        display_values = []
+        for v in values:
+            if isinstance(v, float):
+                display_values.append(f"{v:.1f}" if v != int(v) else str(int(v)))
+            else:
+                display_values.append(str(v))
+
+        stats.append({"name": label, "values": display_values, "better": better})
+
+    structured = {
+        "tours": found_tours,
+        "comparison": {"stats": stats},
+    }
+
+    names = " vs ".join(t["title"] for t in found_tours)
+    return _widget_result(widget, f"Comparing: {names}", structured)
+
+
+async def _handle_show_holiday_packages(arguments: dict) -> types.ServerResult:
+    payload = ShowHolidayPackagesInput.model_validate(arguments)
+    widget = WIDGETS_BY_ID["show-holiday-packages"]
+    client = RaynaApiClient()
+    cards: list[dict] = []
+    data_source = "api"
+
+    # 1. Try live API
+    async with aiohttp.ClientSession() as session:
+        try:
+            city_id = await client.resolve_city_id(session, payload.city)
+            if city_id:
+                raw = await client.get_city_holiday(session, city_id)
+                cards = [format_tour_card(t, payload.city) for t in raw]
+        except Exception:
+            pass
+
+    # 2. Fallback to RAG
+    if not cards and HAS_RAG:
+        data_source = "rag"
+        rag_results = rag_search_tours(f"holiday package {payload.city}", top_k=payload.limit * 3)
+        deduped = rag_dedupe(rag_results)
+        cards = [format_rag_tour_card(r["metadata"]) for r in deduped]
+
+    if not cards:
+        return _error_result(f"No holiday packages found for {payload.city}.")
+
+    cards = cards[: payload.limit]
+    title = f"Holiday Packages in {payload.city}"
+
+    structured = {
+        "tours": cards,
+        "title": title,
+        "subtitle": f"{len(cards)} packages found",
+        "totalResults": len(cards),
+        "dataSource": data_source,
+    }
+
+    text = f"Found {len(cards)} holiday packages in {payload.city}"
+    return _widget_result(widget, text, structured)
+
+
+async def _handle_get_visa_info(arguments: dict) -> types.ServerResult:
+    payload = GetVisaInfoInput.model_validate(arguments)
+    client = RaynaApiClient()
+    visas: list[dict] = []
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            visas = await client.get_visas(session, payload.country, payload.limit)
+        except Exception:
+            pass
+
+    if not visas:
+        return types.ServerResult(
+            types.CallToolResult(
+                content=[
+                    types.TextContent(
+                        type="text",
+                        text=f"No visa information found for '{payload.country}'. Visit https://www.raynatours.com/visa for details.",
+                    )
+                ],
+                isError=False,
+            )
+        )
+
+    lines = [f"Visa information for {payload.country.upper()}:\n"]
+    for v in visas:
+        name = v.get("name") or v.get("title") or "Visa"
+        price = v.get("price") or v.get("amount") or "N/A"
+        visa_type = v.get("type") or v.get("visa_type") or ""
+        processing = v.get("processing_time") or v.get("processingTime") or ""
+        lines.append(f"- {name}")
+        if visa_type:
+            lines.append(f"  Type: {visa_type}")
+        if price != "N/A":
+            lines.append(f"  Price: AED {price}")
+        if processing:
+            lines.append(f"  Processing: {processing}")
+        lines.append("")
+
+    lines.append(f"\nFor more details: https://www.raynatours.com/visa")
+
+    return types.ServerResult(
+        types.CallToolResult(
+            content=[types.TextContent(type="text", text="\n".join(lines))],
+            isError=False,
+        )
+    )
+
+
+async def _handle_ask_rayna(arguments: dict) -> types.ServerResult:
+    """RAG-powered Q&A tool."""
+    payload = AskRaynaInput.model_validate(arguments)
+    question = payload.question
+
+    if not HAS_RAG:
+        return types.ServerResult(
+            types.CallToolResult(
+                content=[types.TextContent(
+                    type="text",
+                    text="The knowledge base is currently unavailable. "
+                         "Please try using show-tours or show-tour-detail instead, "
+                         "or visit https://www.raynatours.com for help.",
+                )],
+                isError=False,
+            )
+        )
+
+    results = rag_search_all(question, top_k=8)
+    deduped = rag_dedupe(results)
+
+    if not deduped or deduped[0]["score"] < 0.3:
+        return types.ServerResult(
+            types.CallToolResult(
+                content=[types.TextContent(
+                    type="text",
+                    text=f"I couldn't find specific information about '{question}' in our knowledge base. "
+                         f"Please visit https://www.raynatours.com or contact our team for help.",
+                )],
+                isError=False,
+            )
+        )
+
+    lines = []
+    for r in deduped[:5]:
+        meta = r["metadata"]
+        title = meta.get("title", "Info")
+        if " | " in title:
+            title = title.split(" | ")[0].strip()
+        desc = meta.get("description", "") or meta.get("content", "")[:300]
+        lines.append(f"**{title}**")
+        if desc:
+            lines.append(desc[:300])
+        price = meta.get("price", "")
+        if price:
+            lines.append(f"Price: AED {price}")
+        url = meta.get("url", "") or meta.get("urlPath", "")
+        if url:
+            lines.append(f"[View details]({url})")
+        lines.append("")
+
+    return types.ServerResult(
+        types.CallToolResult(
+            content=[types.TextContent(type="text", text="\n".join(lines))],
+            isError=False,
+        )
+    )
+
+
+# Route tool calls
+async def _call_tool_request(req: types.CallToolRequest) -> types.ServerResult:
+    tool_name = req.params.name
+    arguments = req.params.arguments or {}
+
+    try:
+        if tool_name == "show-tours":
+            return await _handle_show_tours(arguments)
+        elif tool_name == "show-tour-detail":
+            return await _handle_show_tour_detail(arguments)
+        elif tool_name == "compare-tours":
+            return await _handle_compare_tours(arguments)
+        elif tool_name == "show-holiday-packages":
+            return await _handle_show_holiday_packages(arguments)
+        elif tool_name == "get-visa-info":
+            return await _handle_get_visa_info(arguments)
+        elif tool_name == "ask-rayna":
+            return await _handle_ask_rayna(arguments)
+        else:
+            return _error_result(f"Unknown tool: {tool_name}")
+    except ValidationError as exc:
+        return _error_result(f"Input validation error: {exc.errors()}")
+    except Exception as exc:
+        return _error_result(f"Error executing {tool_name}: {str(exc)}")
+
+
+mcp._mcp_server.request_handlers[types.CallToolRequest] = _call_tool_request
+
+# ---------------------------------------------------------------------------
+# HTTP app
+# ---------------------------------------------------------------------------
+
+app = mcp.streamable_http_app()
+
+# CORS
+try:
+    from starlette.middleware.cors import CORSMiddleware
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
+except Exception:
+    pass
+
+# Health and info routes
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+
+async def health_check(request):
+    return JSONResponse({"status": "healthy", "server": "rayna-tours"})
+
+
+async def server_info(request):
+    return JSONResponse(
+        {
+            "name": "rayna-tours",
+            "version": "1.0.0",
+            "pattern": "OpenAI Apps SDK",
+            "ui": "React",
+            "widgets": len(set(w.template_uri for w in widgets)),
+            "tools": len(TOOL_SCHEMAS),
+        }
+    )
+
+
+app.routes.extend(
+    [
+        Route("/health", health_check),
+        Route("/info", server_info),
+    ]
+)
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+
+    print("=" * 60)
+    print("  Rayna Tours MCP Server with React UI")
+    print("=" * 60)
+    print("\n  Endpoints:")
+    print("  - MCP:    http://0.0.0.0:8000/mcp")
+    print("  - Health: http://0.0.0.0:8000/health")
+    print("  - Info:   http://0.0.0.0:8000/info")
+    widget_count = len(set(w.template_uri for w in widgets))
+    print(f"\n  UI Widgets: {widget_count}")
+    for widget in widgets:
+        print(f"  - {widget.title} ({widget.identifier})")
+    ui_status = "Loaded" if HAS_UI else "Not built"
+    print(f"\n  React Bundles: {ui_status}")
+    rag_status = "Enabled (Pinecone)" if HAS_RAG else "Disabled (set OPENAI_API_KEY & PINECONE_API_KEY)"
+    print(f"  RAG: {rag_status}")
+    print(f"\n  For ChatGPT: http://localhost:8000/mcp")
+    print("  With ngrok: https://YOUR-URL.ngrok-free.app/mcp")
+    print("=" * 60)
+    print("\nPress Ctrl+C to stop\n")
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)

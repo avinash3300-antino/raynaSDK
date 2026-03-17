@@ -1,0 +1,23 @@
+[
+  {
+    "id": "custom-about-rayna",
+    "doc_type": "knowledge",
+    "title": "About Rayna Tours",
+    "category": "company",
+    "content": "Rayna Tours is a leading tour operator based in Dubai, UAE, established in 2006. We offer over 500 tours and activities across the UAE, Saudi Arabia, Oman, Thailand, Indonesia (Bali), Malaysia, and Singapore. Our services include tours, holiday packages, visa processing, and hotel bookings. Headquarters: Dubai, UAE. Website: raynatours.com."
+  },
+  {
+    "id": "custom-destinations",
+    "doc_type": "knowledge",
+    "title": "Rayna Tours Destinations",
+    "category": "company",
+    "content": "Rayna Tours operates in the following destinations: UAE (Dubai, Abu Dhabi, Sharjah, Ras Al Khaimah, Ajman), Saudi Arabia (Jeddah, Riyadh, Makkah, Dammam, Madinah), Oman (Muscat, Khasab), Thailand (Bangkok, Phuket, Krabi, Koh Samui, Pattaya, Chiang Mai), Indonesia (Bali, Jakarta), Malaysia (Kuala Lumpur, Langkawi, Penang), and Singapore."
+  },
+  {
+    "id": "custom-contact",
+    "doc_type": "knowledge",
+    "title": "Contact Information",
+    "category": "company",
+    "content": "Rayna Tours contact: Phone: +971-4-xxx-xxxx, Email: info@raynatours.com, WhatsApp: +971-xxx-xxx-xxxx. Customer service is available 24/7. Visit www.raynatours.com for online bookings and live chat support."
+  }
+]

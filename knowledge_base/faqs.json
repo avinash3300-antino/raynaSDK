@@ -1,0 +1,72 @@
+[
+  {
+    "id": "faq-cancellation",
+    "doc_type": "faq",
+    "title": "Cancellation & Refund Policy",
+    "category": "policies",
+    "content": "Most Rayna Tours experiences offer free cancellation up to 24 hours before the scheduled start time. Refunds are processed within 5-7 business days to the original payment method. Some experiences, such as theme park tickets and special events, may have different cancellation policies which will be clearly stated on the booking page."
+  },
+  {
+    "id": "faq-booking",
+    "doc_type": "faq",
+    "title": "How to Book a Tour",
+    "category": "booking",
+    "content": "You can book tours through raynatours.com, the Rayna Tours mobile app, or by contacting our customer service team. All bookings are confirmed instantly via email. You will receive a voucher with your booking details, meeting point, and contact information."
+  },
+  {
+    "id": "faq-payment",
+    "doc_type": "faq",
+    "title": "Payment Methods",
+    "category": "booking",
+    "content": "Rayna Tours accepts Visa, Mastercard, American Express, Apple Pay, Google Pay, and bank transfers. All prices are displayed in AED (UAE Dirhams) but you can pay in your local currency. Currency conversion is handled by your card issuer."
+  },
+  {
+    "id": "faq-pickup",
+    "doc_type": "faq",
+    "title": "Hotel Pickup & Drop-off",
+    "category": "logistics",
+    "content": "Many tours include complimentary hotel pickup and drop-off within Dubai city limits. For tours in other emirates or countries, pickup may be available at an additional charge. Pickup details and timing are communicated 24 hours before the tour via email or WhatsApp."
+  },
+  {
+    "id": "faq-children",
+    "doc_type": "faq",
+    "title": "Children & Family Policy",
+    "category": "policies",
+    "content": "Children under 3 years are generally free on most tours. Children aged 3-11 receive discounted pricing on select experiences. Some adventure activities have minimum age requirements (e.g., Desert Safari dune bashing requires minimum age 3, Jais Flight zipline requires minimum age 12). Family-friendly tours are clearly marked on our website."
+  },
+  {
+    "id": "faq-what-to-wear",
+    "doc_type": "faq",
+    "title": "What to Wear on Tours",
+    "category": "logistics",
+    "content": "For desert safaris: comfortable clothing and closed shoes. For mosque visits: modest clothing covering shoulders and knees (abayas provided at Sheikh Zayed Mosque). For water parks: swimwear and water shoes. For city tours: comfortable walking shoes and weather-appropriate clothing. Sunscreen and hats are recommended for outdoor activities."
+  },
+  {
+    "id": "faq-group-discounts",
+    "doc_type": "faq",
+    "title": "Group Discounts",
+    "category": "booking",
+    "content": "Groups of 10 or more receive special pricing on most Rayna Tours experiences. Contact our group booking team at groups@raynatours.com for customized itineraries and exclusive rates. Corporate team-building packages are also available."
+  },
+  {
+    "id": "faq-rpoints",
+    "doc_type": "faq",
+    "title": "R-Points Loyalty Program",
+    "category": "loyalty",
+    "content": "Earn R-Points on every booking with Rayna Tours. Points can be redeemed for discounts on future bookings. 100 R-Points = 1 AED discount. Points are automatically credited to your account after completing a tour. Points expire 12 months after earning."
+  },
+  {
+    "id": "faq-best-time-dubai",
+    "doc_type": "faq",
+    "title": "Best Time to Visit Dubai",
+    "category": "travel-tips",
+    "content": "The best time to visit Dubai is from November to March when temperatures are pleasant (20-30°C). Summer months (June-September) are very hot (40-50°C) but offer great indoor attractions at lower prices. The Dubai Shopping Festival runs in January-February. Ramadan dates vary annually and may affect some tour availability."
+  },
+  {
+    "id": "faq-best-time-thailand",
+    "doc_type": "faq",
+    "title": "Best Time to Visit Thailand",
+    "category": "travel-tips",
+    "content": "Thailand's peak season is November to February (cool and dry). March to May is hot season. June to October is monsoon season with occasional heavy rainfall, but tours still operate. Phuket and southern islands are best visited November to April. Bangkok can be visited year-round."
+  }
+]

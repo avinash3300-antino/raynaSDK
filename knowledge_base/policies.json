@@ -1,0 +1,23 @@
+[
+  {
+    "id": "policy-health-safety",
+    "doc_type": "policy",
+    "title": "Health & Safety Protocols",
+    "category": "safety",
+    "content": "Rayna Tours follows all local government health and safety guidelines. Tour vehicles and equipment are regularly sanitized. Guests showing symptoms of illness may be asked to reschedule. Travel insurance is recommended for all international tours."
+  },
+  {
+    "id": "policy-insurance",
+    "doc_type": "policy",
+    "title": "Travel Insurance",
+    "category": "safety",
+    "content": "Rayna Tours recommends purchasing travel insurance for all trips. We offer optional travel insurance at checkout covering trip cancellation, medical emergencies, and lost baggage. Insurance must be purchased at the time of booking."
+  },
+  {
+    "id": "policy-accessibility",
+    "doc_type": "policy",
+    "title": "Accessibility",
+    "category": "accessibility",
+    "content": "Many Rayna Tours experiences are wheelchair accessible. Please contact us before booking if you have specific accessibility requirements. Desert safari vehicles, boats, and some adventure activities may not be accessible. We will do our best to find suitable alternatives."
+  }
+]
