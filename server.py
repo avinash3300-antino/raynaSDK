@@ -18,9 +18,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
+
 import aiohttp
 import mcp.types as types
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 # RAG engine (optional — gracefully degrades if not configured)
@@ -232,6 +235,11 @@ TOOL_ANNOTATIONS: Dict[str, dict] = {
 # FastMCP server
 # ---------------------------------------------------------------------------
 
+# Transport security: allow Railway/cloud hosts (their proxy handles security)
+_transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=False,
+)
+
 mcp = FastMCP(
     name="rayna-tours",
     instructions=(
@@ -251,6 +259,7 @@ mcp = FastMCP(
     sse_path="/mcp",
     message_path="/mcp/messages",
     stateless_http=True,
+    transport_security=_transport_security,
 )
 
 
