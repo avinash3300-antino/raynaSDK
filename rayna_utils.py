@@ -28,6 +28,34 @@ KNOWN_LOCATIONS = [
     "Singapore",
 ]
 
+# Map country/region/state names to their cities (for holiday lookups)
+REGION_TO_CITIES: dict[str, list[str]] = {
+    "thailand": ["Bangkok", "Phuket", "Koh Samui"],
+    "kerala": ["MUNNAR", "Madurai", "Mysore"],
+    "india": ["Delhi", "Mumbai", "Jaipur", "Darjeeling", "Gangtok", "Leh", "Port Blair", "Jaisalmer", "Udaipur", "MUNNAR", "Madurai", "Mysore", "Srinagar"],
+    "uae": ["Dubai City", "Abu Dhabi", "Ras al Khaimah"],
+    "emirates": ["Dubai City", "Abu Dhabi", "Ras al Khaimah"],
+    "turkey": ["Istanbul", "Cappadocia"],
+    "saudi": ["Jeddah", "Makkah", "Dammam", "Riyadh", "TABUK", "Al Ula", "UMLUJ"],
+    "saudi arabia": ["Jeddah", "Makkah", "Dammam", "Riyadh", "TABUK", "Al Ula", "UMLUJ"],
+    "sri lanka": ["Colombo", "Kandy"],
+    "vietnam": ["Danang", "Hanoi", "Phu Quoc"],
+    "malaysia": ["Kuala Lumpur"],
+    "indonesia": ["Bali"],
+    "japan": ["Tokyo"],
+    "europe": ["Paris", "Rome", "Barcelona", "Madrid", "Amsterdam", "Prague", "Vienna", "Zurich", "Berlin", "Frankfurt", "Budapest", "Riga", "Athens", "Rovaniemi"],
+    "rajasthan": ["Jaipur", "Jaisalmer", "Udaipur"],
+    "kashmir": ["Srinagar"],
+    "ladakh": ["Leh"],
+    "andaman": ["Port Blair"],
+    "georgia": ["Tbilisi"],
+    "egypt": ["Cairo"],
+    "maldives": ["Maldives"],
+    "singapore": ["Singapore City"],
+    "russia": ["Moscow"],
+    "uzbekistan": ["Tashkent"],
+}
+
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Desert Safari": ["desert", "safari", "dune", "camel"],
     "City Tour": ["city tour", "sightseeing", "hop on", "hop off"],
@@ -272,13 +300,94 @@ def _build_tour_url(slug: str | None) -> str:
     return f"https://www.raynatours.com/{slug.lstrip('/')}"
 
 
+def _extract_image(raw: dict[str, Any]) -> str:
+    """Extract image URL from various API response formats."""
+    # Flat fields
+    img = raw.get("image")
+    if isinstance(img, dict):
+        img = img.get("src", "")
+    img = img or raw.get("imageUrl") or raw.get("thumbnail") or raw.get("banner_image") or raw.get("bannerImage") or ""
+    if img:
+        return img
+    # Rayna holiday format: imageProps[0].image.src
+    image_props = raw.get("imageProps")
+    if isinstance(image_props, list) and image_props:
+        first = image_props[0]
+        if isinstance(first, dict):
+            inner = first.get("image", {})
+            if isinstance(inner, dict):
+                return inner.get("src", "")
+    return ""
+
+
+def _extract_url(raw: dict[str, Any]) -> str:
+    """Extract product URL from various API response formats."""
+    # Direct url field
+    url = raw.get("url") or ""
+    if url:
+        return url if url.startswith("http") else f"https://www.raynatours.com{url}"
+    # productUrl (can be dict with href, or string)
+    product_url = raw.get("productUrl")
+    if isinstance(product_url, dict):
+        href = product_url.get("href", "")
+        if href:
+            return href if href.startswith("http") else f"https://www.raynatours.com{href}"
+    elif product_url and isinstance(product_url, str):
+        return product_url if product_url.startswith("http") else f"https://www.raynatours.com{product_url}"
+    # Rayna holiday format: productLink.href
+    link = raw.get("productLink")
+    if isinstance(link, dict):
+        href = link.get("href", "")
+        if href:
+            return f"https://www.raynatours.com{href}" if not href.startswith("http") else href
+    # slug fallback
+    slug = raw.get("slug") or ""
+    if slug:
+        return _build_tour_url(slug)
+    return "https://www.raynatours.com"
+
+
+def _extract_holiday_duration(raw: dict[str, Any]) -> str | None:
+    """Extract duration, handling holiday-specific noOfDays/noOfNights fields."""
+    # Standard duration field
+    dur_raw = raw.get("duration")
+    if isinstance(dur_raw, list) and dur_raw:
+        return dur_raw[0].get("label") if isinstance(dur_raw[0], dict) else str(dur_raw[0])
+    if isinstance(dur_raw, str) and dur_raw:
+        return dur_raw
+
+    # Holiday format: noOfNights/noOfDays
+    # API may return pre-formatted strings like "3N / 4D" or plain numbers
+    nights = raw.get("noOfNights")
+    days = raw.get("noOfDays")
+    if nights or days:
+        # If already formatted (e.g. "3N / 4D"), return as-is
+        nights_str = str(nights) if nights else ""
+        days_str = str(days) if days else ""
+        if nights_str and ("N" in nights_str.upper() or "D" in nights_str.upper()):
+            return nights_str
+        if days_str and ("N" in days_str.upper() or "D" in days_str.upper()):
+            return days_str
+        # Build from numbers
+        parts = []
+        if nights_str:
+            parts.append(f"{nights_str}N")
+        if days_str:
+            parts.append(f"{days_str}D")
+        return "/".join(parts)
+
+    return _extract_duration(raw.get("description", "") or raw.get("name", "") or "")
+
+
 def format_tour_card(raw: dict[str, Any], city_name: str = "") -> dict[str, Any]:
     """Convert a raw API product into a standardised TourCard dict."""
-    # Price extraction chain
+    # Price extraction chain — handle holiday fields (priceCents, normalPrice, salePrice)
     current_price = _extract_price(
         raw.get("discountedAmount")
         or raw.get("salePrice")
+        or raw.get("discountedPrice")
         or raw.get("price")
+        or raw.get("priceCents")
         or raw.get("current_price")
         or raw.get("amount")
         or 0
@@ -286,8 +395,10 @@ def format_tour_card(raw: dict[str, Any], city_name: str = "") -> dict[str, Any]
     original_price = _extract_price(
         raw.get("amount")
         or raw.get("normalPrice")
+        or raw.get("originalPrice")
         or raw.get("original_price")
         or raw.get("normal_price")
+        or raw.get("priceCents")
     )
     if original_price <= current_price:
         original_price = None
@@ -298,27 +409,18 @@ def format_tour_card(raw: dict[str, Any], city_name: str = "") -> dict[str, Any]
         discount = round(original_price - current_price, 2)
         discount_pct = round((discount / original_price) * 100)
 
-    title = raw.get("name") or raw.get("title") or raw.get("productName") or "Tour"
+    title = raw.get("name") or raw.get("title") or raw.get("packageName") or raw.get("productName") or "Tour"
     location = raw.get("city") or raw.get("cityName") or raw.get("location") or city_name or _extract_location(title)
-    category_raw = raw.get("category") or ""
+    category_raw = raw.get("category") or raw.get("variant") or raw.get("productCategory") or raw.get("type") or ""
     if isinstance(category_raw, list):
         category_raw = category_raw[0].get("label", "") if category_raw else ""
     category = category_raw or _categorize_activity(title)
 
-    # Duration
-    dur_raw = raw.get("duration")
-    if isinstance(dur_raw, list) and dur_raw:
-        duration = dur_raw[0].get("label") if isinstance(dur_raw[0], dict) else str(dur_raw[0])
-    elif isinstance(dur_raw, str):
-        duration = dur_raw
-    else:
-        duration = _extract_duration(raw.get("description", "") or title)
+    # Duration (with holiday support)
+    duration = _extract_holiday_duration(raw)
 
-    # Image
-    img = raw.get("image")
-    if isinstance(img, dict):
-        img = img.get("src", "")
-    image = img or raw.get("banner_image") or raw.get("thumbnail") or raw.get("bannerImage") or ""
+    # Image (with holiday imageProps support)
+    image = _extract_image(raw)
 
     # Rating
     rating_raw = raw.get("averageRating") or raw.get("rating")
@@ -334,11 +436,12 @@ def format_tour_card(raw: dict[str, Any], city_name: str = "") -> dict[str, Any]
     if not highlights:
         highlights = _extract_highlights(raw.get("description", "") or title)
 
-    slug = raw.get("slug") or raw.get("url") or ""
-    url = _build_tour_url(slug)
+    # URL (with holiday productLink.href support)
+    url = _extract_url(raw)
+    slug = url.replace("https://www.raynatours.com/", "").replace("https://www.raynatours.com", "")
 
     return {
-        "id": str(raw.get("id") or raw.get("slug") or f"tour_{id(raw)}"),
+        "id": str(raw.get("id") or raw.get("productId") or raw.get("slug") or f"tour_{id(raw)}"),
         "title": title,
         "slug": slug,
         "image": image,
@@ -387,6 +490,62 @@ def format_static_tour(tour: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Recursive product finder (handles various API response shapes)
+# ---------------------------------------------------------------------------
+
+
+def _is_product_item(item: dict[str, Any]) -> bool:
+    """Check if a dict looks like a real product (tour, holiday, cruise, etc.)."""
+    has_name = bool(
+        item.get("name") or item.get("title") or item.get("packageName")
+    )
+    has_price = any(
+        item.get(k)
+        for k in (
+            "normalPrice", "salePrice", "price", "currentPrice",
+            "originalPrice", "priceCents", "discountedPrice",
+            "amount", "discountedAmount",
+        )
+    )
+    has_url = bool(
+        item.get("url") or item.get("productUrl") or item.get("productLink")
+    )
+    return has_name and (has_price or has_url)
+
+
+def _find_product_list(data: Any, depth: int = 0) -> list[dict[str, Any]]:
+    """Recursively search for a list of product-like dicts in nested API response."""
+    if depth > 6:
+        return []
+
+    if isinstance(data, list) and data:
+        if isinstance(data[0], dict) and _is_product_item(data[0]):
+            return data
+        for item in data:
+            if isinstance(item, dict):
+                result = _find_product_list(item, depth + 1)
+                if result:
+                    return result
+        return []
+
+    if isinstance(data, dict):
+        # Check known keys first
+        for key in ("products", "packages", "holidays", "cruises", "yachts", "items", "results"):
+            val = data.get(key)
+            if isinstance(val, list) and val and isinstance(val[0], dict) and _is_product_item(val[0]):
+                return val
+        # Recurse into "data" key
+        for key in ("data",):
+            val = data.get(key)
+            if isinstance(val, (dict, list)):
+                result = _find_product_list(val, depth + 1)
+                if result:
+                    return result
+
+    return []
+
+
+# ---------------------------------------------------------------------------
 # Async API Client
 # ---------------------------------------------------------------------------
 
@@ -426,23 +585,66 @@ class RaynaApiClient:
         _city_cache[cache_key] = cities
         return cities
 
-    async def resolve_city_id(self, session: aiohttp.ClientSession, city_name: str) -> int | None:
-        cities = await self.get_available_cities(session)
+    async def resolve_city_id(
+        self, session: aiohttp.ClientSession, city_name: str, product_type: str = "tour"
+    ) -> int | None:
+        """Resolve city name to ID. Checks given product_type first, then falls back to others."""
         city_lower = city_name.lower().strip()
-        for c in cities:
-            if c["name"].lower() == city_lower:
-                return c["id"]
-        # Fuzzy match
-        for c in cities:
-            if city_lower in c["name"].lower() or c["name"].lower() in city_lower:
-                return c["id"]
+
+        # Try the requested product type first, then fall back to others
+        product_types = [product_type] + [
+            pt for pt in ("holiday", "tour", "cruise", "yacht") if pt != product_type
+        ]
+
+        for pt in product_types:
+            cities = await self.get_available_cities(session, pt)
+            # Exact match
+            for c in cities:
+                if c["name"].lower() == city_lower:
+                    return c["id"]
+            # Fuzzy match
+            for c in cities:
+                if city_lower in c["name"].lower() or c["name"].lower() in city_lower:
+                    return c["id"]
         return None
+
+    async def resolve_region_city_ids(
+        self, session: aiohttp.ClientSession, name: str, product_type: str = "holiday"
+    ) -> list[tuple[int, str]]:
+        """Resolve a region/country/state name to a list of (city_id, city_name) pairs.
+
+        First tries direct city match, then falls back to REGION_TO_CITIES mapping.
+        """
+        # Try direct city match first
+        city_id = await self.resolve_city_id(session, name, product_type)
+        if city_id:
+            return [(city_id, name)]
+
+        # Try region/country mapping
+        region_lower = name.lower().strip()
+        city_names = REGION_TO_CITIES.get(region_lower, [])
+        if not city_names:
+            # Fuzzy region match
+            for region_key, city_list in REGION_TO_CITIES.items():
+                if region_lower in region_key or region_key in region_lower:
+                    city_names = city_list
+                    break
+
+        if not city_names:
+            return []
+
+        results: list[tuple[int, str]] = []
+        for cn in city_names:
+            cid = await self.resolve_city_id(session, cn, product_type)
+            if cid:
+                results.append((cid, cn))
+        return results
 
     async def get_city_products(self, session: aiohttp.ClientSession, city_id: int) -> list[dict]:
         data = await self._get(session, "city/products", {"cityId": city_id})
         try:
-            products = data.get("data", {}).get("data", {}).get("products", [])
-            if isinstance(products, list):
+            products = _find_product_list(data)
+            if products:
                 return products[:20]
         except Exception:
             pass
@@ -451,8 +653,8 @@ class RaynaApiClient:
     async def get_city_holiday(self, session: aiohttp.ClientSession, city_id: int) -> list[dict]:
         data = await self._get(session, "city/holiday", {"cityId": city_id})
         try:
-            products = data.get("data", {}).get("data", {}).get("products", [])
-            if isinstance(products, list):
+            products = _find_product_list(data)
+            if products:
                 return products[:20]
         except Exception:
             pass

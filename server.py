@@ -112,15 +112,6 @@ widgets: List[RaynaWidget] = [
         html=_make_html("rayna-tour-compare-root", TOUR_COMPARE_BUNDLE),
         response_text="Displayed tour comparison!",
     ),
-    RaynaWidget(
-        identifier="show-holiday-packages",
-        title="Show Holiday Packages",
-        template_uri="ui://widget/rayna-tour-list.html",
-        invoking="Loading holiday packages...",
-        invoked="Showing holiday packages",
-        html=_make_html("rayna-tour-list-root", TOUR_LIST_BUNDLE),
-        response_text="Displayed holiday packages!",
-    ),
 ]
 
 WIDGETS_BY_ID: Dict[str, RaynaWidget] = {w.identifier: w for w in widgets}
@@ -299,6 +290,18 @@ async def _list_tools() -> List[types.Tool]:
                 _meta=_tool_meta(widget),
             )
         )
+
+    # Holiday packages — uses same tour list widget for rendering
+    tour_list_widget = WIDGETS_BY_ID["show-tours"]
+    tool_list.append(
+        types.Tool(
+            name="show-holiday-packages",
+            title="Show Holiday Packages",
+            description=TOOL_DESCRIPTIONS["show-holiday-packages"],
+            inputSchema=TOOL_SCHEMAS["show-holiday-packages"],
+            _meta=_tool_meta(tour_list_widget),
+        )
+    )
 
     # Text-only tools
     tool_list.append(
@@ -599,18 +602,20 @@ async def _handle_compare_tours(arguments: dict) -> types.ServerResult:
 
 async def _handle_show_holiday_packages(arguments: dict) -> types.ServerResult:
     payload = ShowHolidayPackagesInput.model_validate(arguments)
-    widget = WIDGETS_BY_ID["show-holiday-packages"]
+    widget = WIDGETS_BY_ID["show-tours"]  # Reuse the tour list widget
     client = RaynaApiClient()
     cards: list[dict] = []
     data_source = "api"
 
-    # 1. Try live API
+    # 1. Try live API — resolve region/country to city IDs
     async with aiohttp.ClientSession() as session:
         try:
-            city_id = await client.resolve_city_id(session, payload.city)
-            if city_id:
+            city_pairs = await client.resolve_region_city_ids(session, payload.city, product_type="holiday")
+            for city_id, city_name in city_pairs:
                 raw = await client.get_city_holiday(session, city_id)
-                cards = [format_tour_card(t, payload.city) for t in raw]
+                city_cards = [format_tour_card(t, city_name) for t in raw if isinstance(t, dict)]
+                city_cards = [c for c in city_cards if c.get("title") and c["title"] != "Tour"]
+                cards.extend(city_cards)
         except Exception:
             pass
 
