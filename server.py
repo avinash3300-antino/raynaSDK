@@ -557,6 +557,7 @@ async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
                         "highlights": raw.get("highlights") or [],
                         "inclusions": raw.get("inclusions") or [],
                         "exclusions": raw.get("exclusions") or [],
+                        "itinerary": raw.get("itinerary") or raw.get("itineraryDetails") or "",
                         "rating": float(raw.get("averageRating") or 0) if raw.get("averageRating") else None,
                         "reviewCount": raw.get("reviewCount"),
                         "url": payload.tour_url,
@@ -567,8 +568,12 @@ async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
 
     # 2. Fallback to RAG search by name
     if not detail and payload.tour_name and HAS_RAG:
+        # Search tours first, then all types (holiday packages have pageType="holiday")
         rag_results = rag_search_tours(payload.tour_name, top_k=5)
         deduped = rag_dedupe(rag_results)
+        if not deduped:
+            rag_results = rag_search_all(payload.tour_name, top_k=5)
+            deduped = rag_dedupe(rag_results)
         if deduped:
             meta = deduped[0]["metadata"]
             card = format_rag_tour_card(meta)
@@ -595,7 +600,14 @@ async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
     if not detail:
         return _error_result("Tour not found. Please provide a valid tour URL or name.")
 
-    text = f"{detail['title']} in {detail['location']} - {detail['currency']} {detail['currentPrice']}"
+    text_parts = [f"{detail['title']} in {detail['location']} - {detail['currency']} {detail['currentPrice']}"]
+    if detail.get("duration"):
+        text_parts.append(f"Duration: {detail['duration']}")
+    if detail.get("itinerary"):
+        text_parts.append(f"\nItinerary:\n{detail['itinerary']}")
+    if detail.get("description"):
+        text_parts.append(f"\nDescription:\n{detail['description'][:500]}")
+    text = "\n".join(text_parts)
     return _widget_result(widget, text, detail)
 
 
