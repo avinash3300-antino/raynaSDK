@@ -503,11 +503,27 @@ async def _handle_show_tours(arguments: dict) -> types.ServerResult:
     # Apply category filter
     if payload.category:
         cat_lower = payload.category.lower()
-        cards = [c for c in cards if cat_lower in c.get("category", "").lower() or cat_lower in c["title"].lower()]
+        cat_words = cat_lower.split()
+        cards = [
+            c for c in cards
+            if cat_lower in c.get("category", "").lower()
+            or cat_lower in c["title"].lower()
+            or all(w in c["title"].lower() for w in cat_words)
+        ]
 
     # Apply price filter
     if payload.max_price is not None:
         cards = [c for c in cards if c["currentPrice"] and c["currentPrice"] <= payload.max_price]
+
+    # Fallback to RAG if filters eliminated all API results
+    if not cards and HAS_RAG:
+        data_source = "rag"
+        query = payload.category or payload.city or "popular tours"
+        if payload.city and payload.category:
+            query = f"{payload.category} in {payload.city}"
+        rag_results = rag_search_tours(query, top_k=payload.limit * 3)
+        deduped = rag_dedupe(rag_results)
+        cards = [format_rag_tour_card(r["metadata"]) for r in deduped]
 
     cards = cards[: payload.limit]
 
@@ -587,9 +603,9 @@ async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
                 "originalPrice": None,
                 "currency": card["currency"],
                 "duration": card["duration"],
-                "highlights": [],
-                "inclusions": [],
-                "exclusions": [],
+                "highlights": meta.get("highlights") or [],
+                "inclusions": meta.get("inclusions") or [],
+                "exclusions": meta.get("exclusions") or [],
                 "rating": None,
                 "reviewCount": None,
                 "url": card["url"],
@@ -605,6 +621,18 @@ async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
         text_parts.append(f"Duration: {detail['duration']}")
     if detail.get("itinerary"):
         text_parts.append(f"\nItinerary:\n{detail['itinerary']}")
+    if detail.get("inclusions"):
+        inc = detail["inclusions"]
+        inc_text = ", ".join(inc) if isinstance(inc, list) else str(inc)
+        text_parts.append(f"\nInclusions:\n{inc_text}")
+    if detail.get("exclusions"):
+        exc = detail["exclusions"]
+        exc_text = ", ".join(exc) if isinstance(exc, list) else str(exc)
+        text_parts.append(f"\nExclusions:\n{exc_text}")
+    if detail.get("highlights"):
+        hl = detail["highlights"]
+        hl_text = ", ".join(hl) if isinstance(hl, list) else str(hl)
+        text_parts.append(f"\nHighlights:\n{hl_text}")
     if detail.get("description"):
         text_parts.append(f"\nDescription:\n{detail['description'][:500]}")
     text = "\n".join(text_parts)

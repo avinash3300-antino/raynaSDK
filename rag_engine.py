@@ -166,8 +166,12 @@ def format_rag_tour_card(meta: dict[str, Any]) -> dict[str, Any]:
     if location.startswith("Day "):
         location = location.split("Depart")[0].replace("Day 1:", "").strip()
 
-    slug = _build_url_from_title(meta.get("title", "")).replace("https://www.raynatours.com/", "")
-    url = meta.get("url", "") or meta.get("urlPath", "") or _build_url_from_title(meta.get("title", ""))
+    url = meta.get("url", "") or meta.get("urlPath", "")
+    if url and not url.startswith("http"):
+        url = f"https://www.raynatours.com{url}" if url.startswith("/") else f"https://www.raynatours.com/{url}"
+    if not url:
+        url = _build_url_from_title(meta.get("title", ""))
+    slug = url.replace("https://www.raynatours.com/", "").replace("https://www.raynatours.com", "")
 
     # Match exact same shape as format_tour_card() in rayna_utils.py
     return {

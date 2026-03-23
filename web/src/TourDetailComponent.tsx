@@ -15,8 +15,8 @@ function TourDetailApp() {
     textSecondary: isDark ? "#a0a0a0" : "#6e6e6e",
     textTertiary: isDark ? "#707070" : "#999999",
     border: isDark ? "#3d3d3d" : "#e5e7eb",
-    accent: "#10a37f",
-    accentHover: "#0e8c6b",
+    accent: isDark ? "#ffffff" : "#000000",
+    accentHover: isDark ? "#d0d0d0" : "#333333",
     star: "#f59e0b",
     imagePlaceholder: isDark
       ? "linear-gradient(135deg, #222 0%, #333 50%, #222 100%)"
@@ -142,7 +142,7 @@ function TourDetailApp() {
           style={{
             display: "inline-block",
             background: colors.accent,
-            color: "#ffffff",
+            color: isDark ? "#000000" : "#ffffff",
             padding: "8px 20px",
             borderRadius: "20px",
             fontSize: "18px",
@@ -340,7 +340,7 @@ function TourDetailApp() {
           borderRadius: "12px",
           border: "none",
           background: colors.accent,
-          color: "#ffffff",
+          color: isDark ? "#000000" : "#ffffff",
           fontSize: "15px",
           fontWeight: 700,
           cursor: "pointer",

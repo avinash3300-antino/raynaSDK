@@ -23627,8 +23627,8 @@ function TourListApp() {
     textSecondary: isDark ? "#a0a0a0" : "#6e6e6e",
     textTertiary: isDark ? "#707070" : "#999999",
     border: isDark ? "#3d3d3d" : "#e5e7eb",
-    accent: "#10a37f",
-    accentHover: "#0e8c6b",
+    accent: isDark ? "#ffffff" : "#000000",
+    accentHover: isDark ? "#d0d0d0" : "#333333",
     discount: "#ef4444",
     star: "#f59e0b",
     imagePlaceholder: isDark ? "linear-gradient(135deg, #222 0%, #333 50%, #222 100%)" : "linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 50%, #e2e8f0 100%)"
@@ -23988,7 +23988,7 @@ function TourListApp() {
                 borderRadius: "8px",
                 border: "none",
                 background: colors.accent,
-                color: "#ffffff",
+                color: isDark ? "#000000" : "#ffffff",
                 fontSize: "12px",
                 fontWeight: 600,
                 cursor: "pointer",
@@ -24001,7 +24001,7 @@ function TourListApp() {
                 e.currentTarget.style.background = colors.accent;
               }
             },
-            "Book Now"
+            "Book on Rayna Tours"
           ))
         );
       })
