@@ -123,14 +123,12 @@ def dedupe_by_parent(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _build_url_from_title(title: str) -> str:
-    """Build a raynatours.com URL by slugifying the tour title."""
-    # Remove " | Rayna Tours" or similar suffixes
-    clean = title.split(" | ")[0].strip() if " | " in title else title
-    # Lowercase, replace non-alphanumeric with hyphens, collapse multiple hyphens
-    slug = re.sub(r"[^a-z0-9]+", "-", clean.lower()).strip("-")
-    slug = re.sub(r"-{2,}", "-", slug)
-    if slug:
-        return f"https://www.raynatours.com/{slug}"
+    """Return the Rayna Tours homepage as fallback URL.
+
+    Title-based slugification does not produce valid product URLs on
+    raynatours.com (they require real product IDs like ``-e-18``), so we
+    fall back to the homepage instead of generating broken 404 links.
+    """
     return "https://www.raynatours.com"
 
 
@@ -166,12 +164,32 @@ def format_rag_tour_card(meta: dict[str, Any]) -> dict[str, Any]:
     if location.startswith("Day "):
         location = location.split("Depart")[0].replace("Day 1:", "").strip()
 
-    url = meta.get("url", "") or meta.get("urlPath", "")
+    # Extract URL — filter out namespace names like "rayna_advanced" that aren't real URLs
+    def _looks_like_url(v: str) -> bool:
+        """Return True if value looks like a URL or path, not a namespace/source name."""
+        if not v:
+            return False
+        if v.startswith("http://") or v.startswith("https://"):
+            return True
+        if v.startswith("/"):
+            return True
+        # Must contain a slash to look like a path (reject "rayna_advanced", "rayna_website_advanced")
+        if "/" in v and not v.startswith("rayna"):
+            return True
+        return False
+
+    url = ""
+    for field in ("url", "urlPath"):
+        candidate = meta.get(field, "") or ""
+        if _looks_like_url(candidate):
+            url = candidate
+            break
+
     # Only use source if it looks like a specific product page (3+ path segments),
     # not a category listing page like /dubai/desert-safari-tours/
     if not url:
         source = meta.get("source", "")
-        if source:
+        if source and _looks_like_url(source):
             path = source.replace("https://www.raynatours.com", "").strip("/")
             if path.count("/") >= 2:  # e.g. dubai/desert-safari/evening-safari-e-123
                 url = source

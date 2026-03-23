@@ -1,6 +1,7 @@
 """
-One-time (or re-run) script to populate Pinecone with tour data
-and knowledge base documents.
+One-time (or re-run) script to populate Pinecone with knowledge base documents.
+
+Tour data is fetched live from the Rayna API — no static ingestion needed.
 
 Usage:
     python ingest.py
@@ -12,8 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from rayna_utils import TOUR_DATABASE
-from rag_engine import upsert_tours, upsert_knowledge_docs, is_available
+from rag_engine import is_available
 
 KB_DIR = Path(__file__).parent / "knowledge_base"
 
@@ -38,22 +38,17 @@ def main():
     print("Rayna Tours RAG Ingestion")
     print("=" * 50)
 
-    # 1. Ingest tours
-    print(f"\n[1/2] Ingesting {len(TOUR_DATABASE)} tours...")
-    tour_count = upsert_tours(TOUR_DATABASE)
-    print(f"  Upserted {tour_count} tour vectors")
-
-    # 2. Ingest knowledge base
-    print(f"\n[2/2] Loading knowledge base docs...")
+    # Ingest knowledge base
+    print("\nLoading knowledge base docs...")
     kb_docs = load_knowledge_files()
     if kb_docs:
-        kb_count = upsert_knowledge_docs(kb_docs)
-        print(f"  Upserted {kb_count} knowledge vectors")
+        print(f"  Found {len(kb_docs)} knowledge documents")
+        print("  (Knowledge base ingestion requires upsert implementation)")
     else:
         print("  No knowledge base files found in knowledge_base/")
 
-    print(f"\nDone! Total vectors: {tour_count + len(kb_docs)}")
-    print("You can now use the 'ask-rayna' tool in the MCP server.")
+    print("\nDone!")
+    print("Tour data is fetched live from the Rayna API — no static ingestion needed.")
 
 
 if __name__ == "__main__":

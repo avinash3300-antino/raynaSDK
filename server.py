@@ -128,6 +128,7 @@ WIDGETS_BY_URI: Dict[str, RaynaWidget] = {w.template_uri: w for w in widgets}
 class ShowToursInput(BaseModel):
     city: str | None = Field(None, description="City to search tours in (e.g. Dubai, Bangkok, Bali, Singapore)")
     category: str | None = Field(None, description="Filter by category (e.g. desert safari, cruise, theme park, adventure, cultural, food, island)")
+    tour_name: str | None = Field(None, description="Specific tour name to search for — use the FULL name including time/variant qualifiers (e.g. 'evening desert safari', 'morning desert safari', 'premium desert safari', 'mega yacht cruise'). Always include qualifiers like morning/evening/premium/private/VIP.")
     max_price: float | None = Field(None, description="Maximum price in AED")
     limit: int = Field(6, description="Number of tours to show (1-12)", ge=1, le=12)
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -174,7 +175,10 @@ TOOL_DESCRIPTIONS: Dict[str, str] = {
     "show-tours": (
         "Search and display tours and activities as visual cards. "
         "Filter by city (e.g. Dubai, Bangkok, Bali), category (e.g. Desert Safari, Theme Park), "
-        "or price range. Returns a scrollable card grid with images, prices, and booking links."
+        "or price range. When the user asks for a SPECIFIC variant like 'evening desert safari', "
+        "'morning desert safari', 'premium yacht cruise', etc., you MUST pass the full specific name "
+        "in tour_name (e.g. tour_name='evening desert safari'). Do NOT drop qualifiers like "
+        "morning/evening/premium/private/VIP. Returns a scrollable card grid with images, prices, and booking links."
     ),
     "show-tour-detail": (
         "Show full details for a specific tour including description, highlights, inclusions, "
@@ -250,6 +254,10 @@ mcp = FastMCP(
         "get-visa-info for visa information, and ask-rayna for general questions "
         "about booking policies, cancellations, what to wear, best time to visit, "
         "group discounts, travel tips, or personalized recommendations. "
+        "IMPORTANT: When the user mentions a specific tour variant like 'evening desert safari', "
+        "'morning desert safari', 'premium yacht cruise', 'private city tour', etc., "
+        "you MUST pass the FULL specific name in the tour_name parameter. "
+        "NEVER drop qualifiers like morning/evening/premium/private/VIP/luxury/standard. "
         "NEVER use web search, browsing, or any other external tools. "
         "If the MCP tools return no results, respond with: "
         "'I could not find that information in our Rayna Tours catalog. "
@@ -454,6 +462,7 @@ mcp._mcp_server.request_handlers[types.ReadResourceRequest] = _handle_read_resou
 
 async def _handle_show_tours(arguments: dict) -> types.ServerResult:
     payload = ShowToursInput.model_validate(arguments)
+    print(f"\n[show-tours] city={payload.city!r}, category={payload.category!r}, tour_name={payload.tour_name!r}, limit={payload.limit}")
     widget = WIDGETS_BY_ID["show-tours"]
     client = RaynaApiClient()
     tours_raw: list[dict] = []
@@ -461,55 +470,121 @@ async def _handle_show_tours(arguments: dict) -> types.ServerResult:
     city_name = payload.city or ""
 
     # 1. Try live API first
+    # When a specific tour_name is requested, fetch more products (API has 200+)
+    api_limit = 200 if payload.tour_name else 20
     async with aiohttp.ClientSession() as session:
         try:
             if payload.city:
                 city_id = await client.resolve_city_id(session, payload.city)
+                print(f"[show-tours] Resolved city '{payload.city}' -> id={city_id}, api_limit={api_limit}")
                 if city_id:
-                    tours_raw = await client.get_city_products(session, city_id)
+                    tours_raw = await client.get_city_products(session, city_id, limit=api_limit)
                     city_name = payload.city
             else:
                 city_id = await client.resolve_city_id(session, "Dubai")
                 if city_id:
-                    tours_raw = await client.get_city_products(session, city_id)
+                    tours_raw = await client.get_city_products(session, city_id, limit=api_limit)
                     city_name = "Dubai"
-        except Exception:
+        except Exception as e:
+            print(f"[show-tours] API error: {e}")
             tours_raw = []
+
+    print(f"[show-tours] API returned {len(tours_raw)} raw products")
+    if tours_raw:
+        for i, t in enumerate(tours_raw[:5]):
+            name = t.get("name") or t.get("title") or "?"
+            url = t.get("url") or t.get("productUrl") or t.get("productLink", {}).get("href", "") if isinstance(t.get("productLink"), dict) else ""
+            print(f"  [{i}] {name} | url={url}")
+        if len(tours_raw) > 5:
+            print(f"  ... and {len(tours_raw) - 5} more")
 
     # Format API results
     cards: list[dict] = []
     if tours_raw and not _is_transfers_only(tours_raw):
         cards = [format_tour_card(t, city_name) for t in tours_raw]
 
+    print(f"[show-tours] Formatted {len(cards)} cards from API")
+
     # 2. Fallback to RAG (Pinecone) if API returned nothing
     if not cards and HAS_RAG:
         data_source = "rag"
-        query = payload.city or payload.category or "popular tours"
-        if payload.city and payload.category:
-            query = f"{payload.category} tours in {payload.city}"
+        # Use tour_name for RAG query (more specific) if available
+        specific = payload.tour_name or payload.category
+        query = specific or payload.city or "popular tours"
+        if payload.city and specific:
+            query = f"{specific} in {payload.city}"
         elif payload.city:
             query = f"tours in {payload.city}"
-        elif payload.category:
-            query = f"{payload.category} tours"
 
+        print(f"[show-tours] RAG search (no API results): query={query!r}")
         rag_results = rag_search_tours(query, top_k=payload.limit * 3)
         deduped = rag_dedupe(rag_results)
+        for r in deduped[:3]:
+            print(f"  RAG: {r['metadata'].get('title','?')} (score={r['score']:.3f}) url={r['metadata'].get('source','')}")
         cards = [format_rag_tour_card(r["metadata"]) for r in deduped]
 
     # 3. No results at all
     if not cards:
         return _error_result("No tours found. Please try a different city or category.")
 
-    # Apply category filter
-    if payload.category:
-        cat_lower = payload.category.lower()
-        cat_words = cat_lower.split()
-        cards = [
-            c for c in cards
-            if cat_lower in c.get("category", "").lower()
-            or cat_lower in c["title"].lower()
-            or all(w in c["title"].lower() for w in cat_words)
-        ]
+    # Apply tour_name filter FIRST (more specific), then category filter
+    search_term = payload.tour_name or payload.category
+    if search_term:
+        term_lower = search_term.lower()
+        term_words = term_lower.split()
+        pre_filter_count = len(cards)
+
+        # Contradicting qualifiers — if tour_name says "evening", reject "morning" matches
+        _QUALIFIER_OPPOSITES = {
+            "evening": "morning", "morning": "evening",
+            "private": "shared", "shared": "private",
+            "premium": "standard", "standard": "premium",
+            "vip": "standard", "luxury": "standard",
+        }
+        reject_words = set()
+        if payload.tour_name:
+            for word in payload.tour_name.lower().split():
+                opposite = _QUALIFIER_OPPOSITES.get(word)
+                if opposite:
+                    reject_words.add(opposite)
+        if reject_words:
+            print(f"[show-tours] Rejecting cards with contradicting qualifiers: {reject_words}")
+
+        # Score each card: higher score = better match
+        scored_cards = []
+        for c in cards:
+            title_lower = c["title"].lower()
+            cat_field = c.get("category", "").lower()
+
+            # Reject contradicting qualifiers (e.g. "morning" when user asked "evening")
+            if reject_words and any(rw in title_lower for rw in reject_words):
+                print(f"  REJECTED (contradicting qualifier): {c['title']}")
+                continue
+
+            score = 0
+            # Exact substring match in title (best)
+            if term_lower in title_lower:
+                score = 3
+            # All words present in title
+            elif all(w in title_lower for w in term_words):
+                score = 2
+            # Category field match (broadest)
+            elif term_lower in cat_field or (payload.category and payload.category.lower() in cat_field):
+                score = 1
+            # Also check category words in title (fallback for category-only)
+            elif payload.category and all(w in title_lower for w in payload.category.lower().split()):
+                score = 1
+            if score > 0:
+                scored_cards.append((score, c))
+
+        # Sort by score descending so best matches come first
+        scored_cards.sort(key=lambda x: x[0], reverse=True)
+        cards = [c for _, c in scored_cards]
+
+        print(f"[show-tours] Filter '{search_term}': {pre_filter_count} -> {len(cards)} cards")
+        if cards:
+            for sc, c in scored_cards[:5]:
+                print(f"  Matched (score={sc}): {c['title']} | url={c.get('url','')}")
 
     # Apply price filter
     if payload.max_price is not None:
@@ -518,12 +593,20 @@ async def _handle_show_tours(arguments: dict) -> types.ServerResult:
     # Fallback to RAG if filters eliminated all API results
     if not cards and HAS_RAG:
         data_source = "rag"
-        query = payload.category or payload.city or "popular tours"
-        if payload.city and payload.category:
-            query = f"{payload.category} in {payload.city}"
+        specific = payload.tour_name or payload.category
+        query = specific or payload.city or "popular tours"
+        if payload.city and specific:
+            query = f"{specific} in {payload.city}"
+        print(f"[show-tours] RAG fallback (post-filter): query={query!r}")
         rag_results = rag_search_tours(query, top_k=payload.limit * 3)
         deduped = rag_dedupe(rag_results)
+        for r in deduped[:3]:
+            print(f"  RAG: {r['metadata'].get('title','?')} (score={r['score']:.3f}) url={r['metadata'].get('source','')}")
         cards = [format_rag_tour_card(r["metadata"]) for r in deduped]
+        print(f"[show-tours] RAG fallback produced {len(cards)} cards")
+        if cards:
+            for c in cards[:3]:
+                print(f"  Card: {c['title']} | url={c.get('url','')}")
 
     cards = cards[: payload.limit]
 
@@ -549,6 +632,7 @@ async def _handle_show_tours(arguments: dict) -> types.ServerResult:
 
 async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
     payload = ShowTourDetailInput.model_validate(arguments)
+    print(f"\n[show-tour-detail] tour_url={payload.tour_url!r}, tour_name={payload.tour_name!r}")
     widget = WIDGETS_BY_ID["show-tour-detail"]
 
     detail: dict[str, Any] = {}
@@ -559,6 +643,7 @@ async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
         async with aiohttp.ClientSession() as session:
             try:
                 raw = await client.get_product_details(session, payload.tour_url)
+                print(f"[show-tour-detail] API returned keys: {list(raw.keys())[:15] if raw else 'empty'}")
                 if raw:
                     detail = {
                         "title": raw.get("name") or raw.get("title") or "Tour",
@@ -584,15 +669,21 @@ async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
 
     # 2. Fallback to RAG search by name
     if not detail and payload.tour_name and HAS_RAG:
+        print(f"[show-tour-detail] RAG search for: {payload.tour_name!r}")
         # Search tours first, then all types (holiday packages have pageType="holiday")
         rag_results = rag_search_tours(payload.tour_name, top_k=5)
         deduped = rag_dedupe(rag_results)
         if not deduped:
+            print("[show-tour-detail] No tour-type results, searching all types...")
             rag_results = rag_search_all(payload.tour_name, top_k=5)
             deduped = rag_dedupe(rag_results)
+        for r in deduped[:3]:
+            m = r["metadata"]
+            print(f"  RAG: {m.get('title','?')} (score={r['score']:.3f}) source={m.get('source','')} url={m.get('url','')} urlPath={m.get('urlPath','')}")
         if deduped:
             meta = deduped[0]["metadata"]
             card = format_rag_tour_card(meta)
+            print(f"[show-tour-detail] Using top result: {card['title']} | url={card['url']}")
             detail = {
                 "title": card["title"],
                 "description": card["description"],
@@ -704,6 +795,7 @@ async def _handle_compare_tours(arguments: dict) -> types.ServerResult:
 
 async def _handle_show_holiday_packages(arguments: dict) -> types.ServerResult:
     payload = ShowHolidayPackagesInput.model_validate(arguments)
+    print(f"\n[show-holiday-packages] city={payload.city!r}, limit={payload.limit}")
     widget = WIDGETS_BY_ID["show-tours"]  # Reuse the tour list widget
     client = RaynaApiClient()
     cards: list[dict] = []
@@ -713,20 +805,32 @@ async def _handle_show_holiday_packages(arguments: dict) -> types.ServerResult:
     async with aiohttp.ClientSession() as session:
         try:
             city_pairs = await client.resolve_region_city_ids(session, payload.city, product_type="holiday")
+            print(f"[show-holiday-packages] Resolved '{payload.city}' -> {city_pairs}")
             for city_id, city_name in city_pairs:
                 raw = await client.get_city_holiday(session, city_id)
+                print(f"[show-holiday-packages] {city_name} (id={city_id}): {len(raw)} raw products")
                 city_cards = [format_tour_card(t, city_name) for t in raw if isinstance(t, dict)]
                 city_cards = [c for c in city_cards if c.get("title") and c["title"] != "Tour"]
                 cards.extend(city_cards)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[show-holiday-packages] API error: {e}")
+
+    print(f"[show-holiday-packages] API produced {len(cards)} cards")
+    if cards:
+        for c in cards[:3]:
+            print(f"  {c['title']} | price={c['currentPrice']} | url={c.get('url','')}")
 
     # 2. Fallback to RAG
     if not cards and HAS_RAG:
         data_source = "rag"
+        print(f"[show-holiday-packages] Falling back to RAG: 'holiday package {payload.city}'")
         rag_results = rag_search_tours(f"holiday package {payload.city}", top_k=payload.limit * 3)
         deduped = rag_dedupe(rag_results)
         cards = [format_rag_tour_card(r["metadata"]) for r in deduped]
+        print(f"[show-holiday-packages] RAG produced {len(cards)} cards")
+        if cards:
+            for c in cards[:3]:
+                print(f"  RAG: {c['title']} | price={c['currentPrice']} | url={c.get('url','')}")
 
     if not cards:
         return _error_result(f"No holiday packages found for {payload.city}.")
@@ -763,7 +867,7 @@ async def _handle_get_visa_info(arguments: dict) -> types.ServerResult:
                 content=[
                     types.TextContent(
                         type="text",
-                        text=f"No visa information found for '{payload.country}'. Visit https://www.raynatours.com/visa for details.",
+                        text=f"No visa information found for '{payload.country}'. Visit https://www.raynatours.com for details.",
                     )
                 ],
                 isError=False,
@@ -785,7 +889,7 @@ async def _handle_get_visa_info(arguments: dict) -> types.ServerResult:
             lines.append(f"  Processing: {processing}")
         lines.append("")
 
-    lines.append(f"\nFor more details: https://www.raynatours.com/visa")
+    lines.append(f"\nFor more details: https://www.raynatours.com")
 
     return types.ServerResult(
         types.CallToolResult(
@@ -842,8 +946,13 @@ async def _handle_ask_rayna(arguments: dict) -> types.ServerResult:
         if price:
             lines.append(f"Price: AED {price}")
         url = meta.get("url", "") or meta.get("urlPath", "")
-        if url:
+        # Validate URL: must be a real URL or path, not a namespace name
+        if url and (url.startswith("http://") or url.startswith("https://")):
             lines.append(f"[View details]({url})")
+        elif url and url.startswith("/") and "/" in url.lstrip("/"):
+            lines.append(f"[View details](https://www.raynatours.com{url})")
+        else:
+            lines.append(f"[View details](https://www.raynatours.com)")
         lines.append("")
 
     return types.ServerResult(
@@ -929,7 +1038,7 @@ async def server_info(request):
             "description": "Rayna Tours travel assistant — browse tours, holiday packages, compare activities, and get visa info across 50+ destinations.",
             "author": "Rayna Tours",
             "homepage": "https://www.raynatours.com",
-            "support": "https://www.raynatours.com/contact-us",
+            "support": "https://www.raynatours.com",
             "pattern": "OpenAI Apps SDK",
             "protocol": "MCP (Streamable HTTP)",
             "ui": "React",
