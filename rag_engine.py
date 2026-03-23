@@ -167,6 +167,14 @@ def format_rag_tour_card(meta: dict[str, Any]) -> dict[str, Any]:
         location = location.split("Depart")[0].replace("Day 1:", "").strip()
 
     url = meta.get("url", "") or meta.get("urlPath", "")
+    # Only use source if it looks like a specific product page (3+ path segments),
+    # not a category listing page like /dubai/desert-safari-tours/
+    if not url:
+        source = meta.get("source", "")
+        if source:
+            path = source.replace("https://www.raynatours.com", "").strip("/")
+            if path.count("/") >= 2:  # e.g. dubai/desert-safari/evening-safari-e-123
+                url = source
     if url and not url.startswith("http"):
         url = f"https://www.raynatours.com{url}" if url.startswith("/") else f"https://www.raynatours.com/{url}"
     if not url:

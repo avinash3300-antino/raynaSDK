@@ -322,26 +322,46 @@ def _extract_image(raw: dict[str, Any]) -> str:
 
 def _extract_url(raw: dict[str, Any]) -> str:
     """Extract product URL from various API response formats."""
+    def _ensure_absolute(u: str) -> str:
+        if not u:
+            return ""
+        return u if u.startswith("http") else f"https://www.raynatours.com{u}" if u.startswith("/") else f"https://www.raynatours.com/{u}"
+
     # Direct url field
     url = raw.get("url") or ""
     if url:
-        return url if url.startswith("http") else f"https://www.raynatours.com{url}"
+        return _ensure_absolute(url)
     # productUrl (can be dict with href, or string)
     product_url = raw.get("productUrl")
     if isinstance(product_url, dict):
-        href = product_url.get("href", "")
+        href = product_url.get("href", "") or product_url.get("url", "")
         if href:
-            return href if href.startswith("http") else f"https://www.raynatours.com{href}"
+            return _ensure_absolute(href)
     elif product_url and isinstance(product_url, str):
-        return product_url if product_url.startswith("http") else f"https://www.raynatours.com{product_url}"
+        return _ensure_absolute(product_url)
     # Rayna holiday format: productLink.href
     link = raw.get("productLink")
     if isinstance(link, dict):
-        href = link.get("href", "")
+        href = link.get("href", "") or link.get("url", "")
         if href:
-            return f"https://www.raynatours.com{href}" if not href.startswith("http") else href
+            return _ensure_absolute(href)
+    # Additional URL fields
+    for key in ("detailUrl", "pageUrl", "link", "detailLink"):
+        val = raw.get(key)
+        if val and isinstance(val, str):
+            return _ensure_absolute(val)
+        if isinstance(val, dict):
+            href = val.get("href", "") or val.get("url", "")
+            if href:
+                return _ensure_absolute(href)
+    # source — only use if it looks like a specific product page (3+ path segments)
+    source = raw.get("source", "")
+    if source and isinstance(source, str):
+        path = source.replace("https://www.raynatours.com", "").strip("/")
+        if path.count("/") >= 2:
+            return _ensure_absolute(source)
     # slug fallback
-    slug = raw.get("slug") or ""
+    slug = raw.get("slug") or raw.get("urlSlug") or ""
     if slug:
         return _build_tour_url(slug)
     return "https://www.raynatours.com"

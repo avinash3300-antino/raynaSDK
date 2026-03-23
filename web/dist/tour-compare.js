@@ -23597,10 +23597,10 @@ function TourCompareApp() {
     textSecondary: isDark ? "#a0a0a0" : "#6e6e6e",
     textTertiary: isDark ? "#707070" : "#999999",
     border: isDark ? "#3d3d3d" : "#e5e7eb",
-    accent: isDark ? "#ffffff" : "#000000",
-    accentHover: isDark ? "#d0d0d0" : "#333333",
-    better: isDark ? "#ffffff" : "#000000",
-    betterBg: isDark ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.05)",
+    accent: "#000000",
+    accentHover: "#333333",
+    better: "#000000",
+    betterBg: "rgba(0, 0, 0, 0.05)",
     star: "#f59e0b",
     imagePlaceholder: isDark ? "linear-gradient(135deg, #222 0%, #333 50%, #222 100%)" : "linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 50%, #e2e8f0 100%)"
   };
@@ -23778,7 +23778,7 @@ function TourCompareApp() {
           borderRadius: "8px",
           border: "none",
           background: colors.accent,
-          color: isDark ? "#000000" : "#ffffff",
+          color: "#ffffff",
           fontSize: "11px",
           fontWeight: 600,
           cursor: "pointer",

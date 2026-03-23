@@ -542,7 +542,7 @@ async def _handle_show_tours(arguments: dict) -> types.ServerResult:
     text_lines = [f"Found {len(cards)} tours:"]
     for i, c in enumerate(cards[:6], 1):
         price_str = f"{c['currency']} {c['currentPrice']}"
-        text_lines.append(f"{i}. {c['title']} - {price_str} ({c.get('duration', 'N/A')})")
+        text_lines.append(f"{i}. {c['title']} - {price_str} ({c.get('duration', 'N/A')}) - {c.get('url', '')}")
 
     return _widget_result(widget, "\n".join(text_lines), structured)
 
@@ -617,6 +617,8 @@ async def _handle_show_tour_detail(arguments: dict) -> types.ServerResult:
         return _error_result("Tour not found. Please provide a valid tour URL or name.")
 
     text_parts = [f"{detail['title']} in {detail['location']} - {detail['currency']} {detail['currentPrice']}"]
+    if detail.get("url"):
+        text_parts.append(f"Book here: {detail['url']}")
     if detail.get("duration"):
         text_parts.append(f"Duration: {detail['duration']}")
     if detail.get("itinerary"):
