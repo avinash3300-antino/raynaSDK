@@ -7,7 +7,8 @@
       "Bash(taskkill //PID 3584 //F)",
       "Bash(npm run build)",
       "Bash(python -c \":*)",
-      "Bash(python -c \"import server; print\\(''OK''\\)\")"
+      "Bash(python -c \"import server; print\\(''OK''\\)\")",
+      "Bash(curl -s http://localhost:8000/health)"
     ]
   }
 }

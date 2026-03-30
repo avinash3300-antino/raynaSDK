@@ -23893,7 +23893,7 @@ function TourListApp() {
                 minHeight: "34px"
               }
             },
-            tour.title
+            tour.title || tour.category || "Tour"
           ), tour.duration && /* @__PURE__ */ import_react2.default.createElement(
             "span",
             {
@@ -23942,9 +23942,9 @@ function TourListApp() {
                   color: colors.text
                 }
               },
-              tour.currentPrice ? `${tour.currency} ${formatPrice(tour.currentPrice)}` : tour.priceLabel || "Check price"
+              tour.currentPrice != null && tour.currentPrice > 0 ? `${tour.currency} ${formatPrice(tour.currentPrice)}` : tour.priceLabel || "Check price"
             )),
-            tour.currentPrice ? /* @__PURE__ */ import_react2.default.createElement(
+            tour.currentPrice != null && tour.currentPrice > 0 ? /* @__PURE__ */ import_react2.default.createElement(
               "span",
               {
                 style: {
@@ -23975,10 +23975,11 @@ function TourListApp() {
             "button",
             {
               onClick: () => {
+                const href = tour.url && tour.url !== "https://www.raynatours.com" && tour.url !== "https://www.raynatours.com/" ? tour.url : `https://www.raynatours.com/?s=${encodeURIComponent(tour.title || "")}`;
                 if (window.openai?.openExternal) {
-                  window.openai.openExternal({ href: tour.url });
+                  window.openai.openExternal({ href });
                 } else {
-                  window.open(tour.url, "_blank");
+                  window.open(href, "_blank");
                 }
               },
               style: {

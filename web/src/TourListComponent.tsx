@@ -313,7 +313,7 @@ function TourListApp() {
                     minHeight: "34px",
                   }}
                 >
-                  {tour.title}
+                  {tour.title || tour.category || "Tour"}
                 </h3>
 
                 {/* Duration chip */}
@@ -363,12 +363,12 @@ function TourListApp() {
                         color: colors.text,
                       }}
                     >
-                      {tour.currentPrice
+                      {tour.currentPrice != null && tour.currentPrice > 0
                         ? `${tour.currency} ${formatPrice(tour.currentPrice)}`
                         : tour.priceLabel || "Check price"}
                     </span>
                   </div>
-                  {tour.currentPrice ? <span
+                  {tour.currentPrice != null && tour.currentPrice > 0 ? <span
                     style={{
                       fontSize: "10px",
                       color: colors.textTertiary,
@@ -405,10 +405,15 @@ function TourListApp() {
                 {/* Book Now button */}
                 <button
                   onClick={() => {
+                    // Use specific tour URL, or fall back to search by title
+                    const href =
+                      tour.url && tour.url !== "https://www.raynatours.com" && tour.url !== "https://www.raynatours.com/"
+                        ? tour.url
+                        : `https://www.raynatours.com/?s=${encodeURIComponent(tour.title || "")}`;
                     if (window.openai?.openExternal) {
-                      window.openai.openExternal({ href: tour.url });
+                      window.openai.openExternal({ href });
                     } else {
-                      window.open(tour.url, "_blank");
+                      window.open(href, "_blank");
                     }
                   }}
                   style={{

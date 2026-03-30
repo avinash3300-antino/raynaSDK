@@ -33,6 +33,7 @@ try:
         search_tours as rag_search_tours,
         dedupe_by_parent as rag_dedupe,
         format_rag_tour_card,
+        is_product_page,
         is_available as rag_is_available,
     )
     HAS_RAG = rag_is_available()
@@ -519,6 +520,8 @@ async def _handle_show_tours(arguments: dict) -> types.ServerResult:
         print(f"[show-tours] RAG search (no API results): query={query!r}")
         rag_results = rag_search_tours(query, top_k=payload.limit * 3)
         deduped = rag_dedupe(rag_results)
+        # Filter out blog/article pages — only keep actual bookable products
+        deduped = [r for r in deduped if is_product_page(r["metadata"])]
         for r in deduped[:3]:
             print(f"  RAG: {r['metadata'].get('title','?')} (score={r['score']:.3f}) url={r['metadata'].get('source','')}")
         cards = [format_rag_tour_card(r["metadata"]) for r in deduped]
@@ -600,6 +603,7 @@ async def _handle_show_tours(arguments: dict) -> types.ServerResult:
         print(f"[show-tours] RAG fallback (post-filter): query={query!r}")
         rag_results = rag_search_tours(query, top_k=payload.limit * 3)
         deduped = rag_dedupe(rag_results)
+        deduped = [r for r in deduped if is_product_page(r["metadata"])]
         for r in deduped[:3]:
             print(f"  RAG: {r['metadata'].get('title','?')} (score={r['score']:.3f}) url={r['metadata'].get('source','')}")
         cards = [format_rag_tour_card(r["metadata"]) for r in deduped]
@@ -826,6 +830,7 @@ async def _handle_show_holiday_packages(arguments: dict) -> types.ServerResult:
         print(f"[show-holiday-packages] Falling back to RAG: 'holiday package {payload.city}'")
         rag_results = rag_search_tours(f"holiday package {payload.city}", top_k=payload.limit * 3)
         deduped = rag_dedupe(rag_results)
+        deduped = [r for r in deduped if is_product_page(r["metadata"])]
         cards = [format_rag_tour_card(r["metadata"]) for r in deduped]
         print(f"[show-holiday-packages] RAG produced {len(cards)} cards")
         if cards:

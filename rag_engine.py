@@ -123,13 +123,18 @@ def dedupe_by_parent(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _build_url_from_title(title: str) -> str:
-    """Return the Rayna Tours homepage as fallback URL.
+    """Build a Rayna Tours search URL from the tour title.
 
-    Title-based slugification does not produce valid product URLs on
-    raynatours.com (they require real product IDs like ``-e-18``), so we
-    fall back to the homepage instead of generating broken 404 links.
+    Direct product URLs require real product IDs (like ``-e-18``), so we
+    link to a search instead of generating broken 404 links.
     """
-    return "https://www.raynatours.com"
+    if not title or title.lower() in ("tour", "no title"):
+        return "https://www.raynatours.com"
+    # Clean the title for a search query
+    clean = re.sub(r"\s*\|.*$", "", title).strip()  # Remove " | subtitle"
+    clean = re.sub(r"\s+\d{4}\s*$", "", clean).strip()  # Remove trailing year
+    from urllib.parse import quote
+    return f"https://www.raynatours.com/?s={quote(clean)}"
 
 
 # ---------------------------------------------------------------------------
@@ -137,12 +142,41 @@ def _build_url_from_title(title: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def is_product_page(meta: dict[str, Any]) -> bool:
+    """Return True if the RAG result looks like an actual bookable product, not a blog/article."""
+    page_type = (meta.get("pageType") or "").lower()
+    if page_type in ("blog", "article", "page", "category"):
+        return False
+    title = (meta.get("title") or "").strip().lower()
+    # Skip entries with no real title
+    if not title or title in ("no title", "tour", ""):
+        return False
+    # Blog-style titles: "The Best ...", "Top 10 ...", "X Things ...", "Guide to ..."
+    blog_patterns = [
+        "best ", "top ", "guide to ", "things to ", "how to ", "why ",
+        "tips for ", "complete guide", "ultimate guide", "must visit",
+        "places to ", "what to ",
+    ]
+    for pattern in blog_patterns:
+        if title.startswith(pattern) or title.startswith("the " + pattern):
+            return False
+    return True
+
+
 def format_rag_tour_card(meta: dict[str, Any]) -> dict[str, Any]:
     """Convert Pinecone metadata into the tour card format expected by widgets."""
     title = meta.get("title", "Tour")
-    # Clean title: remove " | Rayna Tours" suffix
+    # Clean title: remove " | subtitle" suffix (e.g. "Tour Name | Rayna Tours")
     if " | " in title:
         title = title.split(" | ")[0].strip()
+    # Clean " : subtitle" (e.g. "Dubai City Tour 2026 : Half Day Sightseeing Tour")
+    if " : " in title:
+        title = title.split(" : ")[0].strip()
+    # Remove trailing year patterns like "2025", "2026"
+    title = re.sub(r"\s+\d{4}\s*$", "", title).strip()
+    # Final fallback
+    if not title or title.lower() in ("no title", ""):
+        title = meta.get("description", "Tour")[:60]
 
     # Extract first image from imageUrls list or use mainImage
     image = meta.get("mainImage", "")
@@ -150,12 +184,14 @@ def format_rag_tour_card(meta: dict[str, Any]) -> dict[str, Any]:
     if image_urls and isinstance(image_urls, list) and len(image_urls) > 0:
         image = image_urls[0]
 
-    # Price — use 0 as fallback (not None) to match API format exactly
+    # Price — use None for missing/zero so the widget shows "Check price" correctly
     price_raw = meta.get("price", "")
     try:
-        price = float(price_raw) if price_raw else 0
+        price = float(price_raw) if price_raw else None
+        if price is not None and price <= 0:
+            price = None
     except (ValueError, TypeError):
-        price = 0
+        price = None
 
     duration = meta.get("duration", "") or ""
     location = meta.get("destination", "") or meta.get("location", "") or ""
@@ -185,13 +221,13 @@ def format_rag_tour_card(meta: dict[str, Any]) -> dict[str, Any]:
             url = candidate
             break
 
-    # Only use source if it looks like a specific product page (3+ path segments),
-    # not a category listing page like /dubai/desert-safari-tours/
+    # Use source URL — accept product pages (2+ path segments) and category pages
     if not url:
         source = meta.get("source", "")
         if source and _looks_like_url(source):
             path = source.replace("https://www.raynatours.com", "").strip("/")
-            if path.count("/") >= 2:  # e.g. dubai/desert-safari/evening-safari-e-123
+            # Accept any raynatours.com path with at least one segment
+            if path and "/" in path:
                 url = source
     if url and not url.startswith("http"):
         url = f"https://www.raynatours.com{url}" if url.startswith("/") else f"https://www.raynatours.com/{url}"
