@@ -5,6 +5,5 @@ fastmcp>=2.11.3
 pydantic>=2.10.0
 starlette>=0.41.0
 uvicorn>=0.34.0
-openai>=1.30.0
-pinecone>=5.0.0
+
 python-dotenv>=1.0.0

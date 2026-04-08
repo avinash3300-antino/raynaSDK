@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 import re
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote  # noqa: F401
 
 import aiohttp
 from cachetools import TTLCache
@@ -15,7 +15,7 @@ from cachetools import TTLCache
 # Constants
 # ---------------------------------------------------------------------------
 
-BASE_URL = "https://earnest-panda-e8edbd.netlify.app/api"
+BASE_URL = "https://data-projects-flax.vercel.app/api"
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 KNOWN_LOCATIONS = [
@@ -90,12 +90,60 @@ REGION_TO_CITIES: dict[str, list[str]] = {
     "finland": ["Rovaniemi"],
 }
 
+# Keywords in tour names that hint at a specific city (for auto-detection)
+TOUR_NAME_CITY_HINTS: dict[str, str] = {
+    "pink city": "Jaipur",
+    "tiger safari": "Jaipur",
+    "jaipur": "Jaipur",
+    "rajasthan": "Jaipur",
+    "ranthambore": "Jaipur",
+    "taj mahal": "Delhi",
+    "agra": "Delhi",
+    "delhi": "Delhi",
+    "golden triangle": "Delhi",
+    "kerala": "MUNNAR",
+    "munnar": "MUNNAR",
+    "kashmir": "Srinagar",
+    "srinagar": "Srinagar",
+    "ladakh": "Leh",
+    "leh": "Leh",
+    "darjeeling": "Darjeeling",
+    "gangtok": "Gangtok",
+    "sikkim": "Gangtok",
+    "andaman": "Port Blair",
+    "port blair": "Port Blair",
+    "manali": "Manali",
+    "shimla": "Shimla",
+    "udaipur": "Udaipur",
+    "jaisalmer": "Jaisalmer",
+    "amritsar": "Amritsar",
+    "golden temple": "Amritsar",
+    "mysore": "Mysore",
+    "madurai": "Madurai",
+    "bali": "Bali",
+    "bangkok": "Bangkok",
+    "phuket": "Phuket",
+    "singapore": "Singapore City",
+    "kuala lumpur": "Kuala Lumpur",
+    "istanbul": "Istanbul",
+    "cappadocia": "Cappadocia",
+    "dubai": "Dubai",
+    "abu dhabi": "Abu Dhabi",
+    "sharjah": "Sharjah",
+    "muscat": "Muscat",
+    "jeddah": "Jeddah",
+    "riyadh": "Riyadh",
+    "makkah": "Makkah",
+    "cairo": "Cairo",
+    "tbilisi": "Tbilisi",
+}
+
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Desert Safari": ["desert", "safari", "dune", "camel"],
     "City Tour": ["city tour", "sightseeing", "hop on", "hop off"],
     "Theme Park": ["theme park", "ferrari world", "legoland", "motiongate", "img", "universal", "fantasea"],
     "Water Park": ["aquaventure", "waterworld", "water park", "splash"],
-    "Adventure": ["zipline", "skydiving", "bungee", "quad bike", "buggy", "mountain", "trek", "jais flight"],
+    "Adventure": ["zipline", "skydiving", "bungee", "quad bike", "buggy", "mountain", "trek", "jais flight", "atv", "rafting", "swing", "paragliding", "parasailing", "jet ski", "flyboard", "wakeboard", "surf", "diving", "climb", "kayak", "canyoning", "rappel", "adventure"],
     "Cruise": ["cruise", "dhow", "dinner cruise", "boat", "sailing"],
     "Attraction": ["burj khalifa", "museum", "aquarium", "frame", "tower", "flyer", "cable car"],
     "Cultural": ["mosque", "heritage", "cultural", "traditional", "temple", "palace", "fort"],
@@ -139,6 +187,17 @@ HIGHLIGHT_KEYWORDS = [
     "Snorkeling", "Sunset Cruise", "Island Hopping", "Temple Tour",
 ]
 
+
+
+def detect_city_from_tour_name(tour_name: str) -> str | None:
+    """Detect city from keywords in a tour name using TOUR_NAME_CITY_HINTS."""
+    name_lower = tour_name.lower()
+    # Try longest keyword first for more specific matches
+    sorted_hints = sorted(TOUR_NAME_CITY_HINTS.items(), key=lambda x: len(x[0]), reverse=True)
+    for keyword, city in sorted_hints:
+        if keyword in name_lower:
+            return city
+    return None
 
 
 def _is_transfers_only(tours: list[dict]) -> bool:
@@ -404,6 +463,204 @@ def format_tour_card(raw: dict[str, Any], city_name: str = "") -> dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Enriched-feed formatters (scraped data → TourCard / TourDetailOutput)
+# ---------------------------------------------------------------------------
+
+
+def _enriched_image(raw: dict[str, Any]) -> str:
+    """Extract best image from an enriched-feed product."""
+    img = raw.get("image") or ""
+    if img:
+        return img
+    all_imgs = raw.get("all_image_links") or ""
+    if all_imgs and isinstance(all_imgs, str):
+        return all_imgs.split(",")[0].strip()
+    return ""
+
+
+def _enriched_price(raw: dict[str, Any]) -> tuple[float, float | None]:
+    """Return (current_price, original_price|None) from enriched-feed fields."""
+    current = _extract_price(
+        raw.get("price_discountedPrice")
+        or raw.get("salePrice")
+        or raw.get("price_totalPrice")
+        or raw.get("normalPrice")
+        or raw.get("discountedAmount")
+        or raw.get("amount")
+        or 0,
+    )
+    original = _extract_price(
+        raw.get("normalPrice")
+        or raw.get("price_totalPrice")
+        or raw.get("amount")
+        or 0,
+    )
+    if original <= current:
+        original = None
+    return current, original
+
+
+def _enriched_url(raw: dict[str, Any]) -> str:
+    """Extract URL from enriched-feed product."""
+    url = raw.get("detail_shareUrl") or raw.get("price_bookingUrl") or raw.get("url") or ""
+    if url and not url.startswith("http"):
+        url = f"https://www.raynatours.com/{url.lstrip('/')}"
+    return url or "https://www.raynatours.com"
+
+
+def _enriched_rating(raw: dict[str, Any]) -> tuple[float | None, int | None]:
+    """Return (rating, review_count) from enriched-feed fields."""
+    rating = None
+    # Try review_averageRating first, then listing_rating (city enriched-feed)
+    for key in ("review_averageRating", "listing_rating", "averageRating", "rating"):
+        r = raw.get(key)
+        if r is not None:
+            try:
+                val = float(r)
+                if val > 0:
+                    rating = val
+                    break
+            except (ValueError, TypeError):
+                pass
+    review_count = None
+    # Try review_totalCount first, then listing_reviewCount (city enriched-feed)
+    for key in ("review_totalCount", "listing_reviewCount", "reviewCount"):
+        rc = raw.get(key)
+        if rc is not None:
+            try:
+                val = int(float(rc))
+                if val > 0:
+                    review_count = val
+                    break
+            except (ValueError, TypeError):
+                pass
+    return rating, review_count
+
+
+def format_enriched_tour_card(raw: dict[str, Any], city_name: str = "") -> dict[str, Any]:
+    """Convert an enriched-feed product into a standardised TourCard dict."""
+    title = raw.get("detail_title") or raw.get("name") or "Tour"
+    current_price, original_price = _enriched_price(raw)
+
+    discount = None
+    discount_pct = None
+    if original_price and original_price > current_price > 0:
+        discount = round(original_price - current_price, 2)
+        discount_pct = round((discount / original_price) * 100)
+
+    location = raw.get("city") or raw.get("location_title") or city_name or ""
+    cat_raw = raw.get("type") or raw.get("price_variant") or ""
+    category = cat_raw.capitalize() if cat_raw else _categorize_activity(title)
+
+    duration = raw.get("amenity_duration") or None
+    if not duration:
+        duration = _extract_duration(raw.get("description_text", "") or title)
+    if not duration and raw.get("amenity_nights"):
+        duration = raw["amenity_nights"]
+
+    image = _enriched_image(raw)
+    rating, review_count = _enriched_rating(raw)
+    url = _enriched_url(raw)
+    slug = url.replace("https://www.raynatours.com/", "").replace("https://www.raynatours.com", "")
+    highlights = _extract_highlights(raw.get("description_text", "") or title)
+
+    return {
+        "id": str(raw.get("productId") or raw.get("id") or f"tour_{id(raw)}"),
+        "title": title,
+        "slug": slug,
+        "image": image,
+        "location": location,
+        "category": category,
+        "originalPrice": original_price,
+        "currentPrice": current_price,
+        "currency": raw.get("currency") or raw.get("price_currency") or "AED",
+        "discount": discount,
+        "discountPercentage": discount_pct,
+        "isRecommended": rating is not None and rating >= 4.8,
+        "isNew": False,
+        "rPoints": _calc_rpoints(current_price),
+        "rating": rating,
+        "reviewCount": review_count,
+        "duration": duration,
+        "highlights": highlights,
+        "url": url,
+    }
+
+
+def _parse_pipe_section_items(section: str) -> list[str]:
+    """Split a pipe-section into individual list items, handling various delimiters."""
+    # Remove common header words like "Inclusions:", "Exclusions:", etc.
+    cleaned = re.sub(r"^(inclusions?|exclusions?|what'?s\s+included|what'?s\s+not\s+included|not\s+included)\s*:?\s*", "", section, flags=re.IGNORECASE).strip()
+    if not cleaned:
+        return []
+    # Split on newlines, bullets, numbered lists
+    items = re.split(r"[\n•\u2022\u2023\u25aa\u25cf]|\d+[.)]\s", cleaned)
+    return [s.strip() for s in items if s.strip() and len(s.strip()) > 2][:12]
+
+
+def format_enriched_tour_detail(raw: dict[str, Any]) -> dict[str, Any]:
+    """Convert an enriched-feed product into a TourDetailOutput dict."""
+    title = raw.get("detail_title") or raw.get("name") or "Tour"
+    description = raw.get("description_text") or ""
+
+    # Parse inclusions / exclusions from description_text (pipe-separated sections)
+    # Format: section0 = description | section1 = inclusions | section2 = exclusions | section3 = redemption | ...
+    inclusions: list[str] = []
+    exclusions: list[str] = []
+    clean_desc = description
+    if description and "|" in description:
+        sections = [p.strip() for p in description.split("|")]
+        # Section 0 = main description
+        clean_desc = sections[0] if sections else description
+        # Section 1 = inclusions (if exists)
+        if len(sections) > 1 and sections[1]:
+            inclusions = _parse_pipe_section_items(sections[1])
+        # Section 2 = exclusions (if exists)
+        if len(sections) > 2 and sections[2]:
+            exclusions = _parse_pipe_section_items(sections[2])
+
+    if len(clean_desc) > 2000:
+        clean_desc = clean_desc[:2000]
+
+    # Highlights from amenities
+    highlights: list[str] = []
+    amenity_all = raw.get("amenities_all") or ""
+    if amenity_all:
+        highlights = [a.strip() for a in amenity_all.split("|") if a.strip()][:8]
+    if not highlights:
+        highlights = _extract_highlights(description or title) or []
+
+    current_price, original_price = _enriched_price(raw)
+    image = _enriched_image(raw)
+    rating, review_count = _enriched_rating(raw)
+    url = _enriched_url(raw)
+
+    location = raw.get("city") or raw.get("location_title") or raw.get("location_address") or ""
+    cat_raw = raw.get("type") or raw.get("price_variant") or ""
+    category = cat_raw.capitalize() if cat_raw else _categorize_activity(title)
+    duration = raw.get("amenity_duration") or _extract_duration(description or title)
+
+    return {
+        "title": title,
+        "description": clean_desc,
+        "image": image,
+        "location": location,
+        "category": category,
+        "currentPrice": current_price,
+        "originalPrice": original_price,
+        "currency": raw.get("currency") or raw.get("price_currency") or "AED",
+        "duration": duration,
+        "highlights": highlights,
+        "inclusions": inclusions,
+        "exclusions": exclusions,
+        "rating": rating,
+        "reviewCount": review_count,
+        "url": url,
+        "rPoints": _calc_rpoints(current_price),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Recursive product finder (handles various API response shapes)
 # ---------------------------------------------------------------------------
 
@@ -503,6 +760,13 @@ class RaynaApiClient:
         self, session: aiohttp.ClientSession, city_name: str, product_type: str = "tour"
     ) -> int | None:
         """Resolve city name to ID. Checks given product_type first, then falls back to others."""
+        info = await self.resolve_city_info(session, city_name, product_type)
+        return info[0] if info else None
+
+    async def resolve_city_info(
+        self, session: aiohttp.ClientSession, city_name: str, product_type: str = "tour"
+    ) -> tuple[int, str, str] | None:
+        """Resolve city name to (city_id, city_name, country_name). Returns None if not found."""
         city_lower = city_name.lower().strip()
 
         # Try the requested product type first, then fall back to others
@@ -515,11 +779,11 @@ class RaynaApiClient:
             # Exact match
             for c in cities:
                 if c["name"].lower() == city_lower:
-                    return c["id"]
+                    return (c["id"], c["name"], c.get("country", ""))
             # Fuzzy match
             for c in cities:
                 if city_lower in c["name"].lower() or c["name"].lower() in city_lower:
-                    return c["id"]
+                    return (c["id"], c["name"], c.get("country", ""))
         return None
 
     async def resolve_region_city_ids(
@@ -574,12 +838,73 @@ class RaynaApiClient:
             pass
         return []
 
-    async def get_product_details(self, session: aiohttp.ClientSession, url: str) -> dict:
-        data = await self._get(session, "product-details", {"url": quote(url, safe="")})
+    async def get_city_yacht(self, session: aiohttp.ClientSession, city_id: int, limit: int = 20) -> list[dict]:
+        data = await self._get(session, "city/yacht", {"cityId": city_id})
         try:
-            return data.get("data", {}).get("data", {}) or data.get("data", {})
+            products = _find_product_list(data)
+            if products:
+                return products[:limit]
         except Exception:
-            return data or {}
+            pass
+        return []
+
+    async def get_city_cruise(self, session: aiohttp.ClientSession, city_id: int, limit: int = 20) -> list[dict]:
+        data = await self._get(session, "city/cruise", {"cityId": city_id})
+        try:
+            products = _find_product_list(data)
+            if products:
+                return products[:limit]
+        except Exception:
+            pass
+        return []
+
+    async def get_enriched_product(self, session: aiohttp.ClientSession, product_id: int | str, product_type: str = "tour") -> dict | None:
+        """Fetch a single enriched product via the enriched-feed endpoint."""
+        data = await self._get(session, "enriched-feed", {
+            "productId": str(product_id),
+            "productType": product_type,
+            "format": "json",
+        })
+        if isinstance(data, dict):
+            products = data.get("products", [])
+            if isinstance(products, list) and products:
+                return products[0]
+        return None
+
+    async def get_enriched_city_products(
+        self,
+        session: aiohttp.ClientSession,
+        city_id: int,
+        city_name: str,
+        country_name: str,
+        product_type: str = "tour",
+        limit: int = 200,
+    ) -> list[dict]:
+        """Fetch enriched products for a city via the enriched-feed endpoint.
+
+        Calls /enriched-feed?cityId=X&cityName=Y&countryName=Z&types=TYPE&format=json
+        Returns fully enriched products with scraped images, reviews, descriptions.
+        """
+        data = await self._get(session, "enriched-feed", {
+            "cityId": str(city_id),
+            "cityName": city_name,
+            "countryName": country_name,
+            "types": product_type,
+            "format": "json",
+        })
+        products: list[dict] = []
+        if isinstance(data, dict):
+            products = data.get("products", [])
+        elif isinstance(data, list):
+            products = data
+        if not isinstance(products, list):
+            products = []
+        # Filter to only enriched products
+        enriched = [p for p in products if isinstance(p, dict) and p.get("_enriched")]
+        if enriched:
+            return enriched[:limit]
+        # Fallback: return all products if none marked as enriched
+        return [p for p in products if isinstance(p, dict)][:limit]
 
     async def get_visas(self, session: aiohttp.ClientSession, country: str | None = None, limit: int = 10) -> list[dict]:
         params = {}
