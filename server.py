@@ -287,6 +287,19 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 
 
+def _tool_annotations(tool_name: str) -> types.ToolAnnotations:
+    hints = TOOL_ANNOTATIONS.get(tool_name, {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "openWorldHint": True,
+    })
+    return types.ToolAnnotations(
+        readOnlyHint=hints.get("readOnlyHint", True),
+        destructiveHint=hints.get("destructiveHint", False),
+        openWorldHint=hints.get("openWorldHint", True),
+    )
+
+
 def _tool_meta(widget: RaynaWidget, tool_name: str = "") -> Dict[str, Any]:
     annotations = TOOL_ANNOTATIONS.get(tool_name, {
         "readOnlyHint": True,
@@ -364,6 +377,7 @@ async def _list_tools() -> List[types.Tool]:
                 title=widget.title,
                 description=TOOL_DESCRIPTIONS.get(widget.identifier, widget.title),
                 inputSchema=TOOL_SCHEMAS[widget.identifier],
+                annotations=_tool_annotations(widget.identifier),
                 _meta=_tool_meta(widget, widget.identifier),
             )
         )
@@ -376,17 +390,19 @@ async def _list_tools() -> List[types.Tool]:
             title="Show Holiday Packages",
             description=TOOL_DESCRIPTIONS["show-holiday-packages"],
             inputSchema=TOOL_SCHEMAS["show-holiday-packages"],
+            annotations=_tool_annotations("show-holiday-packages"),
             _meta=_tool_meta(tour_list_widget, "show-holiday-packages"),
         )
     )
 
-    # Text-only tools (with annotations in _meta)
+    # Text-only tools
     tool_list.append(
         types.Tool(
             name="get-visa-info",
             title="Get Visa Information",
             description=TOOL_DESCRIPTIONS["get-visa-info"],
             inputSchema=TOOL_SCHEMAS["get-visa-info"],
+            annotations=_tool_annotations("get-visa-info"),
             _meta={"annotations": TOOL_ANNOTATIONS["get-visa-info"]},
         )
     )
@@ -398,6 +414,7 @@ async def _list_tools() -> List[types.Tool]:
             title="Show Yachts",
             description=TOOL_DESCRIPTIONS["show-yachts"],
             inputSchema=TOOL_SCHEMAS["show-yachts"],
+            annotations=_tool_annotations("show-yachts"),
             _meta=_tool_meta(tour_list_widget, "show-yachts"),
         )
     )
