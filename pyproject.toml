@@ -3,7 +3,7 @@ name = "rayna-tours-app"
 version = "0.1.0"
 description = "Rayna Tours ChatGPT App - MCP Server with React UI Widgets"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.11.0",
     "cachetools>=5.5.0",
