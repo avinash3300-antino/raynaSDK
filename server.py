@@ -1084,7 +1084,7 @@ from starlette.routing import Route
 
 OPENAI_VERIFICATION_TOKEN = os.getenv(
     "OPENAI_VERIFICATION_TOKEN",
-    "ieGBA_N4IZXhzsMO_EQQnRt-iT3Dv_42ouBWcx7aWB4",
+    "icK9IfjXuP-DE_oKwbFNqXW2w-7a7VsSLWwdCw41zMI",
 )
 
 
