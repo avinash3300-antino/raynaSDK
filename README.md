@@ -128,6 +128,63 @@ raynachatgptsdk-app/
 └── requirements.txt   # Python dependencies (pip)
 ```
 
+## Deploy to Vercel
+
+### 1. Install Vercel CLI
+
+```bash
+npm install -g vercel
+```
+
+### 2. Build React UI first
+
+```bash
+cd web && npm install && npm run build && cd ..
+```
+
+### 3. Deploy
+
+```bash
+vercel
+```
+
+Follow the prompts. On first deploy, select your project settings.
+
+### 4. Set environment variables
+
+```bash
+vercel env add OPENAI_VERIFICATION_TOKEN
+vercel env add RAYNA_API_BASE_URL
+```
+
+Or set them in the Vercel dashboard: **Project → Settings → Environment Variables**
+
+### 5. Redeploy with env vars
+
+```bash
+vercel --prod
+```
+
+### 6. Connect to ChatGPT
+
+Use your Vercel URL in ChatGPT MCP settings:
+
+```
+https://your-project.vercel.app/mcp
+```
+
+> **Note:** Vercel serverless functions have a 10s timeout on Hobby plan and 60s on Pro. If tool calls timeout, consider Railway or Render for long-running server support.
+
+## Deploy to Railway
+
+```bash
+# Push to GitHub, then connect the repo in Railway dashboard
+# Or use Railway CLI:
+railway login
+railway init
+railway up
+```
+
 ## API
 
 All data is fetched from the Rayna Tours enriched-feed API at `https://data-projects-flax.vercel.app/api`. No API keys required.
